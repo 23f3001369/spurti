@@ -21,8 +21,14 @@ import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
-const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || 'dled@iitrpr.ac.in');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'vled-local-admin';
+// Admin auth is env-only — NO hardcoded fallback. A committed default would be a
+// public credential (anyone reading the repo could authenticate). If either is
+// unset, admin endpoints fail closed (see isAdmin) rather than accept a known value.
+const ADMIN_EMAIL = normalizeEmail(process.env.ADMIN_EMAIL || '');
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+if (!ADMIN_EMAIL || !ADMIN_TOKEN) {
+  console.warn('[security] ADMIN_EMAIL/ADMIN_TOKEN not set — admin endpoints are DISABLED until both are configured in .env');
+}
 
 // Survey triangulation pop-up(s). All driven by env so the form link / mode can
 // change without a client rebuild (the client reads these via /api/config).
@@ -257,6 +263,7 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
+  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
   const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
   const tokenOk = String(req.headers['x-admin-token'] || '') === ADMIN_TOKEN;
   return emailOk && tokenOk;
