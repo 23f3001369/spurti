@@ -53,7 +53,8 @@ function makeSurvey(prefix, completedField) {
 }
 const SURVEY = makeSurvey('SURVEY', 'surveyCompleted');
 const POLL2 = makeSurvey('POLL2', 'poll2Completed');
-const SURVEYS = [SURVEY, POLL2];
+const POLL3 = makeSurvey('POLL3', 'poll3Completed');
+const SURVEYS = [SURVEY, POLL2, POLL3];
 
 // Cached fetch of the submitted-email set from a survey's Apps Script endpoint.
 async function getSubmittedEmails(cfg) {
@@ -63,10 +64,17 @@ async function getSubmittedEmails(cfg) {
     const u = cfg.responsesUrl + (cfg.responsesUrl.includes('?') ? '&' : '?') +
               'secret=' + encodeURIComponent(cfg.responsesSecret);
     const r = await fetch(u, { redirect: 'follow' });
-    const j = await r.json();
+    // Apps Script intermittently serves an HTML error/redirect page (esp. under
+    // load) instead of JSON; parse defensively so it fails cleanly instead of
+    // throwing an opaque "Unexpected token '<'".
+    const body = await r.text();
+    let j;
+    try { j = JSON.parse(body); }
+    catch { throw new Error(`non-JSON response (HTTP ${r.status}, ${body.length}B)`); }
     cfg._subs = { at: Date.now(), set: new Set((j.emails || []).map(e => normalizeEmail(e))) };
     return cfg._subs.set;
   } catch (err) {
+    cfg._subs.at = Date.now(); // back off 60s on failure too — don't hammer Apps Script / spam logs
     console.error(`${cfg.key} responses fetch failed:`, err?.message);
     return cfg._subs.set; // serve last good cache on failure
   }
@@ -230,6 +238,7 @@ async function studentPayload(student) {
       leaderboardGroupLabel: groupLabel(myGroup),
       surveyCompleted: Boolean(student.surveyCompleted),
       poll2Completed: Boolean(student.poll2Completed),
+      poll3Completed: Boolean(student.poll3Completed),
       eligibleForVibeGoals: isVibeEligible(student)
     },
     transactions,
@@ -263,7 +272,8 @@ api.get('/health', (_req, res) => res.json({ status: 'ok' }));
 api.get('/config', (_req, res) => res.json({
   allowStudentSearch: ALLOW_STUDENT_SEARCH,
   survey: surveyPublic(SURVEY),
-  poll2: surveyPublic(POLL2)
+  poll2: surveyPublic(POLL2),
+  poll3: surveyPublic(POLL3)
 }));
 
 api.get('/me', async (req, res) => {
@@ -516,6 +526,7 @@ function registerSurveyRoutes(base, cfg) {
 }
 registerSurveyRoutes('/survey', SURVEY);
 registerSurveyRoutes('/poll2', POLL2);
+registerSurveyRoutes('/poll3', POLL3);
 
 api.get('/admin/stats', adminGuard, async (_req, res) => {
   const [yetToOnboard, excusedStudents, sessions, txns, activeStudents] = await Promise.all([

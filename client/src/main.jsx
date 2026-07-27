@@ -84,6 +84,13 @@ function App() {
           completedKey="poll2Completed"
           onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll2Completed: true } }))}
         />
+        <SurveyModal
+          survey={config.poll3}
+          student={profile.student}
+          statusPath="/poll3/status"
+          completedKey="poll3Completed"
+          onDone={() => setProfile(prev => ({ ...prev, student: { ...prev.student, poll3Completed: true } }))}
+        />
       </>
     );
   }
