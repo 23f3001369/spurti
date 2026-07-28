@@ -441,13 +441,83 @@ function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
   );
 }
 
+// SP trajectory modal — the student's weekly cumulative SP vs cohort + onboarding-group
+// means (reference lines cached in TrajectorySnapshot; own line built live from the ledger).
+function TrajectoryModal({ student, onClose }) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    fetch(`${API}/trajectory/state?email=${encodeURIComponent(student.email)}`).then(r => r.json()).then(setData);
+  }, [student.email]);
+
+  const series = data ? [
+    { key: 'you', label: 'You', color: 'var(--primary)', points: data.you, width: 3, dots: true },
+    { key: 'cohort', label: 'Cohort average', color: '#94a3b8', points: data.cohort, width: 2, dash: '5 4' },
+    { key: 'group', label: data.groupLabel ? `Your group (${data.groupLabel})` : 'Your group', color: '#8b5cf6', points: data.group, width: 2 }
+  ].filter(s => s.points && s.points.length) : [];
+
+  const weeks = data?.weeks || 10;
+  const yMax = Math.max(10, ...series.flatMap(s => s.points.map(p => p.sp)));
+  const W = 760, H = 400, padL = 52, padR = 18, padT = 18, padB = 42;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const sx = wk => padL + (weeks <= 1 ? 0 : (wk - 1) / (weeks - 1) * plotW);
+  const sy = sp => padT + (1 - sp / yMax) * plotH;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
+  const xTicks = Array.from({ length: weeks }, (_, i) => i + 1);
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="modal wide traj-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">Your trajectory</p>
+            <h2>SP over your internship — you vs cohort</h2>
+          </div>
+          <button className="secondary" onClick={onClose}>Close</button>
+        </div>
+        {!data ? <p className="muted">Loading…</p> : series.length === 0 ? (
+          <p className="muted">Not enough data yet — check back after your first week.</p>
+        ) : (
+          <>
+            <div className="traj-legend">
+              {series.map(s => <span key={s.key} className="traj-key"><i style={{ background: s.color }} />{s.label}</span>)}
+            </div>
+            <div className="traj-chart">
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="SP trajectory chart">
+                {yTicks.map(v => (
+                  <g key={v}>
+                    <line x1={padL} y1={sy(v)} x2={W - padR} y2={sy(v)} className="traj-grid" />
+                    <text x={padL - 8} y={sy(v) + 4} textAnchor="end" className="traj-axis">{v}</text>
+                  </g>
+                ))}
+                {xTicks.map(w => <text key={w} x={sx(w)} y={H - padB + 20} textAnchor="middle" className="traj-axis">W{w}</text>)}
+                <text x={padL + plotW / 2} y={H - 5} textAnchor="middle" className="traj-axis-title">Weeks since you joined</text>
+                {series.map(s => (
+                  <g key={s.key}>
+                    <polyline points={s.points.map(p => `${sx(p.week)},${sy(p.sp)}`).join(' ')}
+                      fill="none" stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dash || ''}
+                      strokeLinejoin="round" strokeLinecap="round" />
+                    {s.dots && s.points.map(p => <circle key={p.week} cx={sx(p.week)} cy={sy(p.sp)} r="3.5" fill={s.color} />)}
+                  </g>
+                ))}
+              </svg>
+            </div>
+            <p className="muted traj-foot">Cumulative SP, aligned to each student's own join week so everyone is compared fairly regardless of start date.{data.computedAt ? ` Cohort lines updated ${new Date(data.computedAt).toLocaleDateString()}.` : ''}</p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StudentPulse({ profile, badges, nextActions }) {
   const { student, cohort, attendance, polls, transactions } = profile;
   const qualified = attendance.filter(a => a.qualified).length;
   const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
   const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const [showTraj, setShowTraj] = useState(false);
   return (
+    <>
     <section className="pulse-grid">
       <div className="pulse-card progress-card">
         <span>Standing</span>
@@ -475,15 +545,17 @@ function StudentPulse({ profile, badges, nextActions }) {
         <span>Badges</span>
         <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
       </div>
-      <div className="pulse-card wide-pulse">
-        <span>SP trend</span>
+      <button className="pulse-card wide-pulse pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
+        <span>SP trend <em className="expand-hint">expand ↗</em></span>
         <Sparkline points={trend} />
-      </div>
+      </button>
       <div className="pulse-card wide-pulse">
         <span>What to do next</span>
         <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
       </div>
     </section>
+    {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
+    </>
   );
 }
 

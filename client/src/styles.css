@@ -250,6 +250,19 @@ input {
 }
 .pulse-card p { color: var(--muted); margin-bottom: 6px; }
 .wide-pulse { grid-column: span 2; }
+.pulse-clickable { cursor: pointer; text-align: left; border: none; font: inherit; width: 100%; }
+.pulse-clickable:hover { box-shadow: 0 0 0 2px var(--primary) inset; }
+.expand-hint { color: var(--primary); font-style: normal; font-size: 11px; font-weight: 700; margin-left: 6px; }
+.traj-modal { width: min(880px, 100%); }
+.traj-legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 6px 0 4px; }
+.traj-key { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--text); }
+.traj-key i { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+.traj-chart { width: 100%; overflow-x: auto; }
+.traj-chart svg { width: 100%; height: auto; min-width: 480px; }
+.traj-grid { stroke: var(--line); stroke-width: 1; }
+.traj-axis { fill: var(--muted); font-size: 11px; }
+.traj-axis-title { fill: var(--muted); font-size: 12px; font-weight: 700; }
+.traj-foot { margin-top: 10px; font-size: 12px; }
 .compare-list { display: grid; gap: 8px; }
 .compare-list b { font-size: 14px; }
 .badge-row { display: flex; flex-wrap: wrap; gap: 8px; }
