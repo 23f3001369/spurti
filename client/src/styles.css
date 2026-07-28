@@ -223,7 +223,7 @@ input {
 @media (max-width: 720px) { .level-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pulse-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1fr 2fr;
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -263,6 +263,32 @@ input {
 .traj-axis { fill: var(--muted); font-size: 11px; }
 .traj-axis-title { fill: var(--muted); font-size: 12px; font-weight: 700; }
 .traj-foot { margin-top: 10px; font-size: 12px; }
+
+/* ---- My Journey: goal setup + pace bars --------------------------------- */
+.jr-goalset { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; padding: 10px 0; border-top: 1px solid var(--line); }
+.jr-goalset:first-of-type { border-top: none; padding-top: 4px; }
+.jr-goalset label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.jr-goalset input { min-height: 36px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; }
+.jr-missed { color: var(--red); font-size: 12px; font-weight: 800; }
+.jr-progress i.done { background: var(--green); }
+.jr-pill.green { background: #e9f7ee; color: var(--green); }
+.jr-trajlink { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.jr-trajlink h2 { margin: 0; }
+.jr-intro h2 { margin-bottom: 4px; }
+.jr-card { display: flex; flex-direction: column; }
+.jr-goal { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.jr-goal-label { display: block; font-size: 12.5px; font-weight: 800; color: var(--muted); margin-bottom: 6px; }
+.jr-goal-label.done { color: var(--green); }
+.jr-goal-label.miss { color: var(--red); }
+.jr-goal-meta { display: block; font-size: 13px; font-weight: 800; color: var(--text); margin-bottom: 6px; }
+.jr-goal-foot { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.jr-goal-row { display: flex; gap: 8px; align-items: center; }
+.jr-goal-row input { flex: 1; min-height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; }
+.jr-goal-row button { min-height: 34px; white-space: nowrap; }
+.jr-cardfoot { margin-top: auto; padding-top: 12px; display: flex; justify-content: flex-end; }
+.jr-stake { background: none; border: 1px solid var(--primary); color: var(--primary); border-radius: 999px; padding: 6px 12px; font-weight: 800; font-size: 12px; cursor: pointer; }
+.jr-stake:hover { background: var(--primary); color: #fff; }
+.jr-goal-hint { display: block; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
 .compare-list { display: grid; gap: 8px; }
 .compare-list b { font-size: 14px; }
 .badge-row { display: flex; flex-wrap: wrap; gap: 8px; }
