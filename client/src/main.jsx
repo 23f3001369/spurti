@@ -286,12 +286,11 @@ function StudentView({ profile, onBack }) {
       </header>
       <LevelStatus student={student} />
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
+      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
         ['spa','SPA Points'],
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
       {tab === 'spa' && <SpaModule student={student} />}
@@ -528,12 +527,40 @@ function Tabs({ tab, setTab, tabs }) {
 }
 
 function SpBank({ transactions }) {
+  const [size, setSize] = useState(10);
+  // Server sends oldest→newest (sorted dateTime asc); show newest first.
+  const rows = useMemo(() => [...transactions].reverse(), [transactions]);
+  const shown = rows.slice(0, size);
+  const downloadCsv = () => {
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [['Date & time', 'Credit', 'Debit', 'Balance', 'Reason'].join(',')].concat(
+      rows.map(tx => [
+        new Date(tx.dateTime).toLocaleString(),
+        tx.appliedDelta > 0 ? tx.appliedDelta : '',
+        tx.appliedDelta < 0 ? tx.appliedDelta : '',
+        tx.balanceAfter, tx.reason
+      ].map(esc).join(',')));
+    const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = 'sp-bank-statement.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
   return (
     <section className="panel">
-      <h2>SP Bank Statement</h2>
+      <div className="panel-head">
+        <h2>SP Bank</h2>
+        <div className="bank-controls">
+          <label>Show
+            <select value={size} onChange={e => setSize(Number(e.target.value))}>
+              <option value={10}>10</option><option value={20}>20</option><option value={50}>50</option>
+            </select>
+          </label>
+          <button className="secondary" onClick={downloadCsv}>Download CSV</button>
+        </div>
+      </div>
       <div className="bank">
         <div className="bank-header"><span>Date & time</span><span>Credit</span><span>Debit</span><span>Balance</span><span>Reason</span></div>
-        {transactions.map(tx => (
+        {shown.map(tx => (
           <div className="bank-row" key={tx._id}>
             <span>{new Date(tx.dateTime).toLocaleString()}</span>
             <strong className="credit">{tx.appliedDelta > 0 ? `+${tx.appliedDelta}` : ''}</strong>
@@ -543,6 +570,7 @@ function SpBank({ transactions }) {
           </div>
         ))}
       </div>
+      <p className="muted bank-foot">Showing {Math.min(size, rows.length)} of {rows.length} — download CSV for the full statement.</p>
     </section>
   );
 }
