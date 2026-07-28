@@ -18,6 +18,7 @@ import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelt
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
 import { buildSpaState } from './services/spa.js';
+import { buildTrajectoryState } from './services/trajectory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -371,6 +372,15 @@ api.get('/spa/state', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await buildSpaState(student));
+});
+
+// ---- SP trajectory (You vs cohort vs onboarding-group; open to all students) --
+// The student's own weekly line is built live from their ledger; the cohort/group
+// reference lines come from the cached TrajectorySnapshot (buildTrajectories.js).
+api.get('/trajectory/state', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  res.json(await buildTrajectoryState(student));
 });
 
 // ---- Standup commitments (weekly, attendance-only; keep-the-stake) -----------
