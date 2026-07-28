@@ -272,8 +272,6 @@ function SearchModal({ onClose, onStudent }) {
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const { student } = profile;
-  const badges = useMemo(() => buildBadges(profile), [profile]);
-  const nextActions = useMemo(() => buildNextActions(profile), [profile]);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -285,7 +283,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
+      <StudentPulse profile={profile} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
         ['spa','SPA Points'],
@@ -509,52 +507,29 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile, badges, nextActions }) {
-  const { student, cohort, attendance, polls, transactions } = profile;
-  const qualified = attendance.filter(a => a.qualified).length;
-  const pollAttempted = polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
-  const pollTotal = polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+function StudentPulse({ profile }) {
+  const { student, cohort, transactions } = profile;
   const [showTraj, setShowTraj] = useState(false);
+  const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
     <>
-    <section className="pulse-grid">
-      <div className="pulse-card progress-card">
-        <span>Standing</span>
-        <strong>Rank {student.rank}</strong>
-        <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP needed to enter Top 50.`}</p>
-        <p>{cohort.pointsToNextRank === 0 ? 'You are leading your comparison group.' : `${cohort.pointsToNextRank} SP needed for next rank.`}</p>
-      </div>
-      <div className="pulse-card">
-        <span>Cohort comparison</span>
-        <div className="compare-list">
-          <b>Your SP: {student.totalSp}</b>
-          <b>Cohort avg: {cohort.averageSp}</b>
-          <b>Top 50 cutoff: {cohort.top50Cutoff ?? '-'}</b>
-          <b>Top 10 cutoff: {cohort.top10Cutoff ?? '-'}</b>
+      <section className="pulse-grid">
+        <div className="pulse-card progress-card">
+          <span>Standing</span>
+          <strong>Rank {student.rank}</strong>
+          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
+          <div className="compare-list">
+            <b>Cohort avg: {cohort.averageSp}</b>
+            <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
+            <b>Top 10: {cohort.top10Cutoff ?? '—'}</b>
+          </div>
         </div>
-      </div>
-      <div className="pulse-card">
-        <span>Session health</span>
-        <div className="compare-list">
-          <b>{qualified}/{attendance.length} attendance qualified</b>
-          <b>{pollAttempted}/{pollTotal} polls attempted</b>
-        </div>
-      </div>
-      <div className="pulse-card">
-        <span>Badges</span>
-        <div className="badge-row">{badges.map(badge => <em key={badge}>{badge}</em>)}</div>
-      </div>
-      <button className="pulse-card wide-pulse pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
-        <span>SP trend <em className="expand-hint">expand ↗</em></span>
-        <Sparkline points={trend} />
-      </button>
-      <div className="pulse-card wide-pulse">
-        <span>What to do next</span>
-        <ul className="next-list">{nextActions.map(action => <li key={action}>{action}</li>)}</ul>
-      </div>
-    </section>
-    {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
+        <button className="pulse-card pulse-clickable" onClick={() => setShowTraj(true)} title="Open full trajectory">
+          <span>SP trend <em className="expand-hint">expand ↗</em></span>
+          <Sparkline points={trend} />
+        </button>
+      </section>
+      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
     </>
   );
 }
