@@ -681,50 +681,89 @@ const toInput = d => d ? new Date(d).toISOString().slice(0, 10) : '';
 // The unified phase-by-phase progress + SP tab. Four phases: Standups, ViBe, SPA,
 // Projects. Standups & ViBe show real SP; SPA & Projects are placeholders until the
 // Samagama data (and their SP rule) land. Goal *staking* lives in the Commitments tab.
+const NEXT_NUDGE = { standup: 'Next up: push your ViBe courses.', vibe: 'Next up: keep your SPA pace.', spa: 'Next up: ship your first project PR.', project: 'On track across the board — keep it up!' };
+
+// Goal block that lives ON a phase card: set a target date (none/missed) → pace bar
+// once active → "reached" when done. Unit-aware (min for standups, % for ViBe). A GOAL
+// is a self-set target (no SP) — distinct from a COMMITMENT (staking SP, the Stake link).
+function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave }) {
+  const isPct = goal.unit === '%';
+  const metric = isPct ? `${goal.progressPct}% done` : `${goal.current}/${goal.target} ${goal.unit} (${goal.progressPct}%)`;
+  const paceLeft = isPct
+    ? `${goal.remainingPct}% to go · ~${goal.perDay ?? '—'}%/day to stay on track`
+    : `${goal.remaining} ${goal.unit} to go · ~${goal.perDay ?? '—'} ${goal.unit}/${goal.perDayUnit || 'day'} to stay on track`;
+
+  if (goal.status === 'achieved') {
+    return <div className="jr-goal"><span className="jr-goal-label done">🎯 Goal reached 🎉</span><span className="jr-goal-foot">{NEXT_NUDGE[phaseKey]}</span></div>;
+  }
+  if (goal.status === 'active') {
+    return (
+      <div className="jr-goal">
+        {goal.pending ? (
+          <span className="jr-goal-meta">🎯 Goal: by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left · progress soon</span>
+        ) : (
+          <>
+            <span className="jr-goal-meta">🎯 Goal: {metric} · by {fmtDate(goal.targetDate)} · {goal.daysLeft}d left</span>
+            <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
+            <span className="jr-goal-foot">{paceLeft}</span>
+          </>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="jr-goal">
+      <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
+        🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
+      </span>
+      <div className="jr-goal-row">
+        <input type="date" min={goal.minDate || undefined} max={goal.maxDate || undefined} value={form[field] ?? ''} onChange={e => setForm({ ...form, [field]: e.target.value })} />
+        <button className="secondary" disabled={!form[field]} onClick={() => onSave(field, form[field])}>Set goal</button>
+      </div>
+      {goal.minDate && <span className="jr-goal-hint">Earliest realistic: {fmtDate(goal.minDate)}{goal.paceHint ? ` · ${goal.paceHint}` : ''}</span>}
+    </div>
+  );
+}
+
 function MyJourney({ student, setTab }) {
   const email = student.email;
   const [data, setData] = useState(null);
-  const [plan, setPlan] = useState({ vibeBy: '', spaBy: '', projectBy: '' });
-  const [savedMsg, setSavedMsg] = useState(false);
+  const [form, setForm] = useState({});
+  const [showTraj, setShowTraj] = useState(false);
+  const [err, setErr] = useState(null);
 
   const load = async () => {
     const r = await fetch(`${API}/journey/state?email=${encodeURIComponent(email)}`);
-    const j = await r.json();
-    setData(j);
-    if (j.plan) setPlan({ vibeBy: toInput(j.plan.vibeBy), spaBy: toInput(j.plan.spaBy), projectBy: toInput(j.plan.projectBy) });
+    setData(await r.json());
   };
   useEffect(() => { load(); }, [email]);
-
-  const savePlan = async () => {
-    const r = await fetch(`${API}/journey/plan`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, ...plan })
-    });
-    if (r.ok) { setData(await r.json()); setSavedMsg(true); setTimeout(() => setSavedMsg(false), 2000); }
-  };
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
 
-  const { standups, vibe, spa, projects } = data;
-  const spaPct = spa.total ? Math.round(spa.solved / spa.total * 100) : 0;
+  const { standups, vibe, goals } = data;
+
+  const saveTarget = async (field, value) => {
+    const r = await fetch(`${API}/journey/plan`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, [field]: value })
+    });
+    const j = await r.json();
+    if (!r.ok) { setErr(j.error); return; }
+    setErr(null); setData(j);
+  };
+  const gp = { form, setForm, onSave: saveTarget };
 
   return (
     <div className="jr">
-      <section className="panel jr-plan">
-        <h2>My internship plan</h2>
-        <p className="muted">Four phases to your Summership. Set the dates you’re aiming for — your cards below track you against them. (SP is staked separately in the <b>Commitments</b> tab.)</p>
-        <div className="jr-plan-row">
-          <label>Finish ViBe by<input type="date" value={plan.vibeBy} onChange={e => setPlan({ ...plan, vibeBy: e.target.value })} /></label>
-          <label>Solve all 53 SPA by<input type="date" value={plan.spaBy} onChange={e => setPlan({ ...plan, spaBy: e.target.value })} /></label>
-          <label>First project PR by<input type="date" value={plan.projectBy} onChange={e => setPlan({ ...plan, projectBy: e.target.value })} /></label>
-          <button className="primary" onClick={savePlan}>Save plan</button>
-          {savedMsg && <span className="jr-saved">✓ Saved</span>}
-        </div>
+      <section className="panel jr-intro">
+        <h2>My Journey</h2>
+        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP. &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</p>
+        {err && <p className="error">{err}</p>}
       </section>
 
       <div className="jr-grid">
-        {/* Phase 1 — Standups */}
+        {/* Standups — continuous, no completion goal; commitment only */}
         <section className="jr-card phase-standups">
           <div className="jr-head"><span className="jr-n">1</span><h3>Standups</h3><span className="jr-sp">+{standups.sp} SP</span></div>
           <p className="jr-sub">Zoom attendance + Spandan polls</p>
@@ -737,12 +776,14 @@ function MyJourney({ student, setTab }) {
             <span className="jr-pill">Attendance +{standups.spAttendance}</span>
             <span className="jr-pill">Polls +{standups.spPolls}</span>
           </div>
+          <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
+          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => setTab('vibe')}>🎲 Stake SP →</button></div>
         </section>
 
-        {/* Phase 2 — ViBe */}
+        {/* ViBe — goal + commitment */}
         <section className="jr-card phase-vibe">
           <div className="jr-head"><span className="jr-n">2</span><h3>ViBe courses</h3><span className={`jr-sp ${vibe.sp < 0 ? 'neg' : ''}`}>{vibe.sp >= 0 ? '+' : ''}{vibe.sp} SP</span></div>
-          <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete · plan: by {fmtDate(data.plan.vibeBy)}</p>
+          <p className="jr-sub">{vibe.clearedCount}/{vibe.totalCourses} courses complete</p>
           <div className="jr-dots">
             {vibe.ladder.map(l => (
               <div key={l.key} className={`jr-dot ${l.cleared ? 'done' : (vibe.current && vibe.current.key === l.key ? 'current' : '')}`} title={l.name}>
@@ -750,40 +791,35 @@ function MyJourney({ student, setTab }) {
               </div>
             ))}
           </div>
-          <div className="jr-splits">
-            {vibe.current
-              ? <span className="jr-pill">Now: {vibe.current.name} — {vibe.current.pct}%</span>
-              : <span className="jr-pill">All courses complete 🎉</span>}
-            {vibe.activeCommitment && <span className="jr-pill amber">Active commitment: +{vibe.activeCommitment.goalPct}%</span>}
-            <button className="jr-link" onClick={() => setTab('vibe')}>Set a commitment →</button>
-          </div>
+          {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
+          <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
+          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => setTab('vibe')}>🎲 Stake SP →</button></div>
         </section>
 
-        {/* Phase 3 — SPA (data + SP rule pending Samagama) */}
+        {/* SPA — goal (date) works now; progress data + commitment coming soon */}
         <section className="jr-card phase-spa">
-          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Coming soon</span></div>
-          <p className="jr-sub">53-problem set · plan: by {fmtDate(data.plan.spaBy)}</p>
-          {spa.pending
-            ? <p className="cm-soon">Your Matrix Mystics progress and SP will appear here soon — we’re wiring up the data.</p>
-            : <>
-                <div className="jr-big"><strong>{spa.solved}</strong><span>/ {spa.total} solved</span></div>
-                <div className="jr-progress"><i style={{ width: `${spaPct}%` }} /></div>
-                <div className="jr-splits"><span className="jr-pill">{spa.spaPoints} SPA points</span></div>
-              </>}
+          <div className="jr-head"><span className="jr-n">3</span><h3>SPA — Matrix Mystics</h3><span className="jr-soon">Data soon</span></div>
+          <p className="jr-sub">53-problem set · progress data coming soon</p>
+          <PhaseGoal phaseKey="spa" field="spaBy" goal={goals.spa} targetText="solve all 53 problems" {...gp} />
         </section>
 
-        {/* Phase 4 — Projects (data + SP rule pending Samagama) */}
+        {/* Projects — goal (date) works now; progress data coming soon */}
         <section className="jr-card phase-project">
-          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Coming soon</span></div>
-          <p className="jr-sub">Pull requests · plan: by {fmtDate(data.plan.projectBy)}</p>
-          {projects.pending
-            ? <p className="cm-soon">Your project PRs and SP will appear here soon — we’re wiring up the data.</p>
-            : <div className="jr-stats">
-                <div><strong>{projects.prsRaised}</strong><span>PRs raised</span></div>
-                <div><strong>{projects.prsMerged}</strong><span>PRs merged</span></div>
-              </div>}
+          <div className="jr-head"><span className="jr-n">4</span><h3>Projects</h3><span className="jr-soon">Data soon</span></div>
+          <p className="jr-sub">Pull requests · progress data coming soon</p>
+          <PhaseGoal phaseKey="project" field="projectBy" goal={goals.project} targetText="raise your first PR" {...gp} />
         </section>
       </div>
+
+      <section className="panel jr-trajlink">
+        <div>
+          <h2>Your SP trajectory</h2>
+          <p className="muted">Your Spurti Points over time vs the cohort and your group.</p>
+        </div>
+        <button className="secondary" onClick={() => setShowTraj(true)}>View trajectory ↗</button>
+      </section>
+
+      {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
     </div>
   );
 }
