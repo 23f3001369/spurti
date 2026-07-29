@@ -97,6 +97,12 @@ const SPA_TEACH_UNIT = 8, SPA_TEACH_CAP = 30;   // +8 SP / validated peer taught
 const SPA_FRAUD_RATE = 0.5, SPA_AUDIT_RATE = 0.2;
 const SPA_GOOD = ['approved', 'audit_passed'];
 
+// ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
+// +5 SP per DISTINCT peer query a student answered (from
+// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded, no cap.
+// Answering only — asking a question earns nothing.
+const QUERY_UNIT = 5;
+
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
 const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x) ? null : x.toISOString().slice(0, 10); };
@@ -257,6 +263,31 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
   }
 
+  // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
+  //     peer.submittedAnswerHistory (userIds); map userId→email via an act_* crosswalk,
+  //     canonicalize, and drop self-answers (answerer == asker). Non-students fall out
+  //     naturally (only canons in `candidates` get rows below).
+  const uidToEmail = new Map();
+  for (const c of ['act_query_reviews', 'act_pull_requests', 'act_cs_faq', 'act_spa_rosters']) {
+    for (const r of await sak.collection(c).find({ userId: { $ne: null }, email: { $ne: null } }, { projection: { userId: 1, email: 1 } }).toArray())
+      uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
+  }
+  const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  for (const q of await sak.collection('act_query_reviews').find(
+        { 'peer.submittedAnswerHistory.0': { $exists: true } },
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1 } }).toArray()) {
+    const askerId = String(q.userId);
+    const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
+    const seen = new Set();
+    for (let uid of (q.peer.submittedAnswerHistory || [])) {
+      uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+      const e = uidToEmail.get(uid); if (!e) continue;
+      const c = canonOf(e);
+      let arr = queryByCanon.get(c); if (!arr) { arr = []; queryByCanon.set(c, arr); }
+      arr.push(date);
+    }
+  }
+
   // 4. assemble ledger, ROSTER-DRIVEN union: base 100 to every started intern.
   const ledger = []; const setAside = []; const finalBal = new Map(); const zeroOut = []; const nameByCanon = new Map();
   const spaSummary = []; // per-canon SPA breakdown for the web-app SPA tab (spaprogresses)
@@ -301,6 +332,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
       if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
         reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+    }
+    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per day.
+    const qDates = queryByCanon.get(cand);
+    if (qDates && qDates.length) {
+      const qByDay = new Map();
+      for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
+      for (const [d, n] of qByDay) rows.push({ date: d, order: 4, cat: 'query', delta: n * QUERY_UNIT,
+        reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${n * QUERY_UNIT} SP.` });
     }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
