@@ -822,7 +822,18 @@ api.post('/peer-review/submit', async (req, res) => {
       return res.status(409).json({ error: 'Already submitted', submission: existing });
     }
 
-    const teamLink = prLink.replace(/\/+$/, '').replace(/[?#].*$/, '').toLowerCase();
+    const raw = prLink.trim().toLowerCase();
+    let teamLink;
+    if (/\/pull[s]?\/(\d+)/.test(raw)) {
+      teamLink = 'pr-' + raw.match(/\/pull[s]?\/(\d+)/)[1];
+    } else if (/^\d+$/.test(raw)) {
+      teamLink = 'pr-' + raw;
+    } else if (/team-/.test(raw)) {
+      const parts = raw.replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '').replace(/[?#].*$/, '').split('/');
+      teamLink = parts[parts.length - 1];
+    } else {
+      teamLink = raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
+    }
 
     const submission = await PeerReviewSubmission.create({
       studentEmail: email,
