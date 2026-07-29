@@ -5,6 +5,7 @@ import mongoose from 'mongoose';
 // a planned date can later award a completion bonus. One plan per student.
 const journeyPlanSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, trim: true, required: true, unique: true, index: true },
+  standupBy: { type: Date, default: null },   // reach 3600 cumulative Zoom minutes by
   vibeBy: { type: Date, default: null },      // finish all 3 ViBe courses by
   spaBy: { type: Date, default: null },       // solve all 53 SPA problems by
   projectBy: { type: Date, default: null }    // first / target project PR by
