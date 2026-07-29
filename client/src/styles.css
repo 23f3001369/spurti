@@ -666,8 +666,13 @@ input {
 .jr-pill.muted { background: #f1f5f9; color: var(--muted); font-weight: 600; }
 .jr-link { background: none; border: none; color: var(--primary); font-weight: 800; font-size: 12px; cursor: pointer; padding: 0; margin-left: auto; }
 
-/* ---- Commitments hub (accordion, one card per phase) --------------------- */
+/* ---- Commitments hub (sub-tabs, one phase at a time) --------------------- */
 .cm { display: grid; gap: 12px; }
+.cm-subtabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cm-subtab { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 8px 14px; font: inherit; font-weight: 700; font-size: 13px; color: var(--muted); cursor: pointer; }
+.cm-subtab:hover { border-color: var(--primary); color: var(--text); }
+.cm-subtab.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.cm-subtab.active .cm-tag { background: rgba(255, 255, 255, 0.24); color: #fff; }
 .cm-acc { border: 1px solid var(--line); border-radius: 12px; background: var(--panel, #fff); overflow: hidden; border-left: 4px solid var(--line); }
 .cm-acc.open { box-shadow: var(--shadow, 0 1px 3px rgba(0,0,0,.06)); }
 .cm-acc.phase-vibe.open { border-left-color: #8b5cf6; }

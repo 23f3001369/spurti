@@ -271,7 +271,9 @@ function SearchModal({ onClose, onStudent }) {
 
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
+  const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
+  const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
   return (
     <main className="page compact">
       <header className="topbar">
@@ -289,8 +291,8 @@ function StudentView({ profile, onBack }) {
         ['spa','SPA Points'],
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
-      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
+      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} goToCommitment={goToCommitment} />}
+      {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -725,7 +727,7 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   );
 }
 
-function MyJourney({ student, setTab }) {
+function MyJourney({ student, goToCommitment }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -777,7 +779,7 @@ function MyJourney({ student, setTab }) {
             <span className="jr-pill">Polls +{standups.spPolls}</span>
           </div>
           <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => setTab('vibe')}>🎲 Stake SP →</button></div>
+          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>
         </section>
 
         {/* ViBe — goal + commitment */}
@@ -793,7 +795,7 @@ function MyJourney({ student, setTab }) {
           </div>
           {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
           <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => setTab('vibe')}>🎲 Stake SP →</button></div>
+          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>
         </section>
 
         {/* SPA — goal (date) works now; progress data + commitment coming soon */}
@@ -838,34 +840,25 @@ const COMMITMENT_TYPES = [
   { key: 'project', name: 'Projects',            blurb: 'Pledge to raise / merge N pull requests by a date.',                        ready: false }
 ];
 
-function Commitments({ student }) {
-  const [open, setOpen] = useState('vibe');
+function Commitments({ student, initialPhase }) {
+  const [phase, setPhase] = useState(initialPhase || 'vibe');
+  const active = COMMITMENT_TYPES.find(t => t.key === phase) || COMMITMENT_TYPES[0];
   return (
     <div className="cm">
       <section className="panel">
         <h2>Commitments</h2>
-        <p className="muted">Stake SP on a goal in any phase — hit it by the deadline and win your stake back multiplied; miss and you lose a penalty on top. <b>One active commitment per phase</b> (up to four running at once).</p>
-      </section>
-      {COMMITMENT_TYPES.map(t => {
-        const isOpen = open === t.key;
-        return (
-          <section key={t.key} className={`cm-acc ${isOpen ? 'open' : ''} phase-${t.key}`}>
-            <button className="cm-accbtn" onClick={() => setOpen(isOpen ? null : t.key)}>
-              <span className="cm-caret">{isOpen ? '▾' : '▸'}</span>
-              <b>{t.name}</b>
-              {!t.ready && <span className="cm-tag">coming soon</span>}
-              <span className="cm-blurb">{t.blurb}</span>
+        <p className="muted">Stake SP on a goal — hit it by the deadline to win it back multiplied; miss and lose a penalty. <b>One active per phase.</b></p>
+        <div className="cm-subtabs">
+          {COMMITMENT_TYPES.map(t => (
+            <button key={t.key} className={`cm-subtab phase-${t.key} ${phase === t.key ? 'active' : ''}`} onClick={() => setPhase(t.key)}>
+              {t.name}{!t.ready && <span className="cm-tag">soon</span>}
             </button>
-            {isOpen && (
-              <div className="cm-body">
-                {t.ready
-                  ? (t.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
-                  : <p className="cm-soon">{t.blurb}<br /><b>Coming soon</b> — same stake-and-win mechanic as ViBe, tuned to this phase.</p>}
-              </div>
-            )}
-          </section>
-        );
-      })}
+          ))}
+        </div>
+      </section>
+      {active.ready
+        ? (active.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
+        : <section className="panel"><p className="cm-soon">{active.blurb}<br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</p></section>}
     </div>
   );
 }
