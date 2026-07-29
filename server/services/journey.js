@@ -12,7 +12,7 @@ import SPTransaction from '../models/SPTransaction.js';
 import Commitment from '../models/Commitment.js';
 import JourneyPlan from '../models/JourneyPlan.js';
 import JourneyProgress from '../models/JourneyProgress.js';
-import { buildVibeState } from './vibe.js';
+import { buildVibeState, isVibeEligible } from './vibe.js';
 
 export const SPA_TOTAL = 53;
 export const STANDUP_MINUTES_TARGET = 3600;   // cumulative Zoom minutes (~120 min/week)
@@ -43,11 +43,13 @@ export async function buildJourneyState(student) {
   // --- Phase 2: ViBe (3 courses) — summarise the commitment module ---
   const v = await buildVibeState(student);
   const settled = await Commitment.find({ email, type: 'vibe', status: { $in: ['won', 'lost'] } }).lean();
+  // Pre-16-July students never had the ViBe Onboarding course — show them AI + MERN only.
+  const ladder = isVibeEligible(student) ? v.ladder : v.ladder.filter(l => l.key !== 'onboarding');
   const vibe = {
-    ladder: v.ladder,
+    ladder,
     current: v.current,
-    clearedCount: v.ladder.filter(l => l.cleared).length,
-    totalCourses: v.ladder.length,
+    clearedCount: ladder.filter(l => l.cleared).length,
+    totalCourses: ladder.length,
     activeCommitment: v.active
       ? { course: v.active.course, goalPct: v.active.goalPct, deadline: v.active.deadline }
       : null,

@@ -287,11 +287,12 @@ function StudentView({ profile, onBack }) {
       <LevelStatus student={student} />
       <StudentPulse profile={profile} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
-        ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
+        ['journey','My Journey'],
+        ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} goToCommitment={goToCommitment} />}
+      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
@@ -706,7 +707,7 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   );
 }
 
-function MyJourney({ student, goToCommitment }) {
+function MyJourney({ student, goToCommitment, canCommit = false }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -739,7 +740,7 @@ function MyJourney({ student, goToCommitment }) {
     <div className="jr">
       <section className="panel jr-intro">
         <h2>My Journey</h2>
-        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP. &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</p>
+        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
         {err && <p className="error">{err}</p>}
       </section>
 
@@ -758,7 +759,7 @@ function MyJourney({ student, goToCommitment }) {
             <span className="jr-pill">Polls +{standups.spPolls}</span>
           </div>
           <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>
+          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>}
         </section>
 
         {/* ViBe — goal + commitment */}
@@ -774,7 +775,7 @@ function MyJourney({ student, goToCommitment }) {
           </div>
           {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
           <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>
+          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
         </section>
 
         {/* SPA — goal (date) works now; progress data + commitment coming soon */}
