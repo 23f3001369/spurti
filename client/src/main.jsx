@@ -288,13 +288,12 @@ function StudentView({ profile, onBack }) {
       <StudentPulse profile={profile} badges={badges} nextActions={nextActions} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'], ['polls','Polls'],
         ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
-        ['exit-ticket','Exit Ticket'], ['peer-review','Peer Review'],
+        ['peer-review','Peer Review'],
         ['leaderboard','Leaderboard']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'polls' && <Polls polls={profile.polls} />}
       {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} setTab={setTab} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} />}
-      {tab === 'exit-ticket' && <ExitTicket email={student.email} />}
       {tab === 'peer-review' && <PeerReviewTab email={student.email} student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
     </main>
@@ -1291,110 +1290,6 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
   );
 }
 
-function ExitTicket({ email }) {
-  const [eligible, setEligible] = useState([]);
-  const [myTickets, setMyTickets] = useState([]);
-  const [selectedSession, setSelectedSession] = useState('');
-  const [response, setResponse] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState('');
-
-  const loadData = () => {
-    fetch(`${API}/exit-ticket/eligible-sessions`).then(r => r.json()).then(d => setEligible(d.eligible || [])).catch(() => {});
-    fetch(`${API}/exit-ticket/status`).then(r => r.json()).then(d => setMyTickets(d.tickets || [])).catch(() => {});
-  };
-
-  useEffect(() => { loadData(); }, [email]);
-
-  const statusBadge = (s) => {
-    if (s === 'pending') return <span className="status-pending">Pending</span>;
-    if (s === 'accepted') return <span className="status-accepted">Accepted</span>;
-    return <span className="status-rejected">Rejected</span>;
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!selectedSession || !response.trim()) return;
-    setSubmitting(true);
-    setMessage('');
-    try {
-      const res = await fetch(`${API}/exit-ticket`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionLabel: selectedSession, response: response.trim() })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage('Exit ticket submitted! It will be graded automatically.');
-        setResponse('');
-        setSelectedSession('');
-        loadData();
-      } else {
-        setMessage(data.error || 'Failed to submit');
-      }
-    } catch { setMessage('Network error'); }
-    setSubmitting(false);
-  };
-
-  const openSessions = eligible.filter(s => !s.alreadySubmitted);
-  const closedTickets = myTickets.filter(t => t.status !== 'pending');
-
-  return (
-    <section className="panel">
-      <h2>Exit Ticket</h2>
-      <p className="muted">Submit a brief reflection within 24 hours after a standup session ends. Valid responses earn +3 SP.</p>
-
-      {openSessions.length > 0 ? (
-        <form onSubmit={submit} style={{ marginBottom: 20 }}>
-          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Session</label>
-          <select value={selectedSession} onChange={e => setSelectedSession(e.target.value)} style={{ width: '100%', padding: 8, marginBottom: 12 }}>
-            <option value="">Select a session...</option>
-            {openSessions.map(s => (
-              <option key={s.label} value={s.label}>{s.label}</option>
-            ))}
-          </select>
-
-          <label style={{ display: 'block', marginBottom: 6, fontWeight: 600 }}>Your reflection</label>
-          <textarea
-            value={response}
-            onChange={e => setResponse(e.target.value)}
-            placeholder="What did you learn? What was confusing? Any suggestions?"
-            rows={4}
-            style={{ width: '100%', padding: 8, resize: 'vertical' }}
-          />
-
-          <button type="submit" disabled={submitting || !selectedSession || !response.trim()} style={{ marginTop: 10 }}>
-            {submitting ? 'Submitting...' : 'Submit Exit Ticket'}
-          </button>
-        </form>
-      ) : (
-        <p className="muted" style={{ marginBottom: 16 }}>No sessions with open exit ticket windows right now.</p>
-      )}
-
-      {message && <p style={{ marginBottom: 12, color: message.includes('submitted') ? 'green' : 'red' }}>{message}</p>}
-
-      {closedTickets.length > 0 && (
-        <div>
-          <h3>Your Submissions</h3>
-          <div className="bank" style={{ marginTop: 10 }}>
-            <div className="bank-header"><span>Session</span><span>Status</span><span>Score</span></div>
-            {closedTickets.map(t => (
-              <div className="bank-row" key={t._id}>
-                <span>{t.sessionLabel}</span>
-                {statusBadge(t.status)}
-                <span>{t.qualityScore != null ? `${t.qualityScore}/100` : '—'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {myTickets.filter(t => t.status === 'pending').length > 0 && (
-        <p className="muted" style={{ marginTop: 12 }}>{myTickets.filter(t => t.status === 'pending').length} submission(s) pending grading.</p>
-      )}
-    </section>
-  );
-}
 
 function PeerReviewTab({ email, student }) {
   const [view, setView] = useState('dashboard');

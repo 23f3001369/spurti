@@ -17,10 +17,8 @@ import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
 import { buildJourneyState, saveJourneyPlan } from './services/journey.js';
-import ExitTicket from './models/ExitTicket.js';
 import PeerReviewSubmission from './models/PeerReviewSubmission.js';
 import PeerReview from './models/PeerReview.js';
-import { evaluateExitTicket } from './services/exitTicketScoring.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -775,102 +773,6 @@ const PEER_REVIEW_RUBRIC = [
   { id: 10, question: "Does the submission demonstrate problem-solving — does the student explain trade-offs, challenges faced, or alternative approaches considered?", description: "Evaluates critical thinking — the student should reflect on why they chose their approach and what difficulties they encountered.", points: 3 }
 ];
 const PEER_REVIEW_MAX_POINTS = 30;
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EXIT TICKETS — submit within 24h of session end, graded by cron
-// ═══════════════════════════════════════════════════════════════════════════
-const EXIT_TICKET_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-api.get('/exit-ticket/eligible-sessions', async (req, res) => {
-  try {
-    const email = await studentEmailFromRequest(req);
-    if (!email) return res.status(401).json({ error: 'Not authenticated' });
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-
-    const now = new Date();
-    const cutoff = new Date(now.getTime() - EXIT_TICKET_WINDOW_MS);
-    const sessions = await Session.find({ endDateTime: { $gte: cutoff, $lte: now } })
-      .sort({ endDateTime: -1 }).lean();
-
-    const submitted = await ExitTicket.find({ email }).lean();
-    const submittedLabels = new Set(submitted.map(t => t.sessionLabel));
-
-    const eligible = sessions.map(s => ({
-      label: s.label,
-      date: s.date,
-      endDateTime: s.endDateTime,
-      alreadySubmitted: submittedLabels.has(s.label),
-    }));
-
-    res.json({ eligible });
-  } catch (err) {
-    console.error('exit-ticket eligible-sessions error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-api.post('/exit-ticket', async (req, res) => {
-  try {
-    const email = await studentEmailFromRequest(req);
-    if (!email) return res.status(401).json({ error: 'Not authenticated' });
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] });
-    if (!student) return res.status(404).json({ error: 'Student not found' });
-
-    const { sessionLabel, response } = req.body;
-    if (!sessionLabel || !response) {
-      return res.status(400).json({ error: 'sessionLabel and response required' });
-    }
-    if (typeof response !== 'string' || response.trim().length < 1) {
-      return res.status(400).json({ error: 'Response must be a non-empty string' });
-    }
-
-    const session = await Session.findOne({ label: sessionLabel });
-    if (!session) return res.status(404).json({ error: 'Session not found' });
-    const now = new Date();
-    const windowStart = new Date(session.endDateTime.getTime());
-    const windowEnd = new Date(windowStart.getTime() + EXIT_TICKET_WINDOW_MS);
-    if (now < windowStart || now > windowEnd) {
-      return res.status(400).json({ error: 'Exit ticket window is closed (must submit within 24h of session end)' });
-    }
-
-    const existing = await ExitTicket.findOne({ email, sessionLabel });
-    if (existing) {
-      return res.status(409).json({ error: 'Already submitted an exit ticket for this session', ticket: existing });
-    }
-
-    const ticket = await ExitTicket.create({
-      email,
-      studentId: student._id,
-      sessionLabel,
-      response: response.trim(),
-      status: 'pending',
-      submittedAt: now,
-    });
-
-    res.json({ success: true, ticket: { _id: ticket._id, sessionLabel: ticket.sessionLabel, status: ticket.status, submittedAt: ticket.submittedAt } });
-  } catch (err) {
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'Already submitted an exit ticket for this session' });
-    }
-    console.error('exit-ticket POST error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-api.get('/exit-ticket/status', async (req, res) => {
-  try {
-    const email = await studentEmailFromRequest(req);
-    if (!email) return res.status(401).json({ error: 'Not authenticated' });
-    const filter = { email };
-    if (req.query.sessionLabel) filter.sessionLabel = req.query.sessionLabel;
-    const tickets = await ExitTicket.find(filter).sort({ submittedAt: -1 }).lean();
-    res.json({ tickets });
-  } catch (err) {
-    console.error('exit-ticket status error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PEER REVIEW — Phase 1 project submission and peer evaluation
