@@ -354,15 +354,14 @@ api.put('/vibe/bet/:id', async (req, res) => {
 });
 
 // DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
-api.post('/vibe/bet/:id/settle', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
-  if (!bet) return res.status(404).json({ error: 'No active bet.' });
-  const result = req.body?.result === 'lost' ? 'lost' : 'won';
-  await settleBetDemo(bet, result);
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.post('/vibe/bet/:id/settle', async (_req, res) => {
+  // LOCKED DOWN (security): client-controlled self-settlement is removed. This route
+  // trusted req.body.result (defaulting to "won") and granted SP with NO check against
+  // real ViBe course completion — students could place a bet and instantly self-declare
+  // a win to mint SP. There is no real completion feed (VibeProgress.pct was written by
+  // settleBetDemo itself), so settlement cannot be verified yet; disabled until a
+  // server-side/automatic settlement against real completion data is built.
+  return res.status(403).json({ error: 'Bets are settled automatically, not on request. Self-settlement is disabled.' });
 });
 
 // ---- SPA → SP (peer-teaching endorsement points; ALL cohorts) ----------------
@@ -401,14 +400,11 @@ api.post('/standup/commit', async (req, res) => {
 });
 
 // DEMO: resolve a standup commitment (no live weekly settlement cron yet).
-api.post('/standup/commit/:id/settle', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const c = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'standup', status: 'active' });
-  if (!c) return res.status(404).json({ error: 'No active standup commitment.' });
-  await settleStandupDemo(c, req.body?.result === 'lost' ? 'lost' : 'won');
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildStandupState(fresh));
+api.post('/standup/commit/:id/settle', async (_req, res) => {
+  // LOCKED DOWN (security): same self-settlement exploit as /vibe/bet/:id/settle —
+  // client-declared "won" minted SP with no verification. Disabled until server-side
+  // settlement against real attendance/completion is built.
+  return res.status(403).json({ error: 'Commitments are settled automatically, not on request. Self-settlement is disabled.' });
 });
 
 // ---- My Journey (phase-by-phase progress + SP; 16 July cohort onward) ---------
