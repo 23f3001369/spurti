@@ -11,6 +11,8 @@ function computeTeamLink(prLink) {
   } else if (/team-/.test(raw)) {
     const parts = raw.replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '').replace(/[?#].*$/, '').split('/');
     return parts[parts.length - 1];
+  } else if (/^[0-9a-f]{10,}$/.test(raw)) {
+    return 'team-' + raw;
   } else {
     return raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
   }

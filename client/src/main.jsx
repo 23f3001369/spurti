@@ -1788,7 +1788,7 @@ function linkTypeInfo(link) {
     return { type: 'pull-request', label: 'Pull Request', tip: 'This is a team PR. View the code changes, read the description, and check the diff. Team members share the same PR — evaluate the team\'s collective work as presented here.' };
   if (/^\d+$/.test(s))
     return { type: 'pull-number', label: 'PR #' + s, tip: 'Only a PR number was submitted. Open github.com/vicharanashala/crowd-source-faq/pull/' + s + ' to view the actual PR, or ask the student for the full link if unclear.' };
-  if (/team-/.test(s))
+  if (/team-/.test(s) || /^[0-9a-f]{10,}$/.test(s))
     return { type: 'team-repo', label: 'Team Repository', tip: 'This is a team repository. Browse the code in the repo link above. Since it\'s a shared team repo, evaluate the student\'s specific contributions based on the project report and product.md.' };
   if (s.startsWith('https://') || s.startsWith('http://'))
     return { type: 'fork', label: 'Personal Fork / Other Link', tip: 'This appears to be a personal fork or external link. Evaluate the code as-is — the student is working independently on their own copy.' };
