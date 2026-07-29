@@ -822,11 +822,15 @@ api.post('/peer-review/submit', async (req, res) => {
       return res.status(409).json({ error: 'Already submitted', submission: existing });
     }
 
+    const prMatch = prLink.match(/(\d+)\/?$/);
+    const teamPrNumber = prMatch ? prMatch[1] : null;
+
     const submission = await PeerReviewSubmission.create({
       studentEmail: email,
       studentId: student._id,
       studentName: student.name,
       prLink,
+      teamPrNumber,
       projectReport,
       productMd,
       status: 'submitted'
@@ -894,8 +898,13 @@ api.get('/peer-review/to-review', async (req, res) => {
 
     const reviewedEmails = await PeerReview.find({ reviewerEmail: email }).distinct('revieweeEmail');
 
+    const excludeFilter = { studentEmail: { $ne: email, $nin: reviewedEmails } };
+    if (mySubmission.teamPrNumber) {
+      excludeFilter.teamPrNumber = { $ne: mySubmission.teamPrNumber };
+    }
+
     const availableSubmissions = await PeerReviewSubmission.find({
-      studentEmail: { $ne: email, $nin: reviewedEmails },
+      ...excludeFilter,
       status: { $in: ['submitted', 'under_review'] }
     }).select('studentName studentEmail prLink submittedAt reviewCount').lean();
 
@@ -910,6 +919,7 @@ api.get('/peer-review/to-review', async (req, res) => {
         studentName: s.studentName,
         maskedEmail: maskEmail(s.studentEmail),
         prLink: s.prLink,
+        teamPrNumber: s.teamPrNumber,
         submittedAt: s.submittedAt,
         reviewCount: s.reviewCount
       }))
@@ -930,6 +940,13 @@ api.post('/peer-review/start/:submissionId', async (req, res) => {
     if (!submission) return res.status(404).json({ error: 'Submission not found' });
     if (submission.studentEmail === email) {
       return res.status(400).json({ error: 'Cannot review your own submission' });
+    }
+
+    if (submission.teamPrNumber) {
+      const mySubmission = await PeerReviewSubmission.findOne({ studentEmail: email });
+      if (mySubmission && mySubmission.teamPrNumber === submission.teamPrNumber) {
+        return res.status(400).json({ error: 'Cannot review a teammate' });
+      }
     }
 
     const existingReview = await PeerReview.findOne({
@@ -1110,7 +1127,7 @@ api.get('/admin/peer-review/submissions', adminGuard, async (req, res) => {
     const submissions = await PeerReviewSubmission.find().sort({ submittedAt: -1 }).lean();
     res.json(submissions.map(s => ({
       _id: s._id, studentName: s.studentName, studentEmail: s.studentEmail, prLink: s.prLink,
-      submittedAt: s.submittedAt, status: s.status, reviewCount: s.reviewCount,
+      teamPrNumber: s.teamPrNumber, submittedAt: s.submittedAt, status: s.status, reviewCount: s.reviewCount,
       averageScore: s.averageScore, totalPoints: s.totalPoints, spAwarded: s.spAwarded
     })));
   } catch (err) {
