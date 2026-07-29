@@ -550,27 +550,6 @@ function Sparkline({ points }) {
   );
 }
 
-function buildBadges(profile) {
-  const badges = [];
-  const qualifiedPct = profile.attendance.length ? profile.attendance.filter(a => a.qualified).length / profile.attendance.length : 0;
-  const pollAttempted = profile.polls.reduce((sum, p) => sum + p.attemptedQuestions, 0);
-  const pollTotal = profile.polls.reduce((sum, p) => sum + p.totalQuestions, 0);
-  if (profile.student.rank <= 50) badges.push('Top 50');
-  if (qualifiedPct >= 0.75) badges.push('Consistent Attendee');
-  if (pollTotal && pollAttempted / pollTotal >= 0.75) badges.push('Poll Champion');
-  if (profile.student.totalSp >= profile.cohort.averageSp) badges.push('Above Average');
-  return badges.length ? badges : ['Getting Started'];
-}
-
-function buildNextActions(profile) {
-  const actions = [];
-  if (profile.cohort.pointsToTop50 > 0) actions.push(`Earn ${profile.cohort.pointsToTop50} more SP to enter Top 50.`);
-  if (profile.attendance.some(a => !a.qualified)) actions.push('Attend at least 75% of upcoming sessions to avoid attendance debit.');
-  if (profile.polls.some(p => p.missedQuestions > 0)) actions.push('Attempt every poll question to avoid poll debit.');
-  actions.push('Check your SP Bank after each session to understand every credit and debit.');
-  return actions.slice(0, 4);
-}
-
 function Tabs({ tab, setTab, tabs }) {
   return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
 }
