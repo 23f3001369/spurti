@@ -103,6 +103,12 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 // Answering only — asking a question earns nothing.
 const QUERY_UNIT = 5;
 
+// ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
+// the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
+// standup commitment SP (stake debits + wins) AND admin manual awards; 'peer_faq' =
+// peer-review FAQ awards. We fold their deltas back into each student's balance.
+const PRESERVED_CATS = ['manual', 'peer_faq'];
+
 const isMandatory = (t) => /stand|orientation/i.test(t) && !/breakout|weekend|nptel|special|support|non[- ]?mandatory/i.test(t);
 const tier = (pct) => { pct = Math.min(100, pct); return pct >= 90 ? 10 : pct >= 75 ? 5 : pct >= 50 ? 3 : 0; };
 const dstr = (d) => { if (!d) return null; const x = new Date(d); return isNaN(x) ? null : x.toISOString().slice(0, 10); };
@@ -288,6 +294,19 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     }
   }
 
+  // 3e. PRESERVED rows (manual/peer_faq) — read BEFORE the wipe and fold into each
+  //     student's ledger so commitment/admin SP survives the rebuild. Re-created with
+  //     the same delta/date/reason (metadata like original createdAt is not retained).
+  const preservedByCanon = new Map(); // canon -> [{ date, order, cat, delta, reason }]
+  for (const t of await sak.collection('sptransactions').find({ category: { $in: PRESERVED_CATS } }).toArray()) {
+    const e = String(t.email || '').toLowerCase().trim(); if (!e) continue;
+    const c = canonOf(e);
+    const date = dstr(t.dateTime) || dstr(t.createdAt) || TODAY;
+    const delta = Number(typeof t.appliedDelta === 'number' ? t.appliedDelta : t.deltaValue) || 0;
+    let arr = preservedByCanon.get(c); if (!arr) { arr = []; preservedByCanon.set(c, arr); }
+    arr.push({ date, order: 5, cat: t.category, delta, reason: t.reason || '' });
+  }
+
   // 4. assemble ledger, ROSTER-DRIVEN union: base 100 to every started intern.
   const ledger = []; const setAside = []; const finalBal = new Map(); const zeroOut = []; const nameByCanon = new Map();
   const spaSummary = []; // per-canon SPA breakdown for the web-app SPA tab (spaprogresses)
@@ -341,6 +360,8 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       for (const [d, n] of qByDay) rows.push({ date: d, order: 4, cat: 'query', delta: n * QUERY_UNIT,
         reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${n * QUERY_UNIT} SP.` });
     }
+    // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
+    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
