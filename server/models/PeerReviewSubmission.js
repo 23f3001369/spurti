@@ -6,7 +6,7 @@ const peerReviewSubmissionSchema = new mongoose.Schema({
   studentName: { type: String, required: true },
 
   prLink: { type: String, required: true },
-  teamPrNumber: { type: String, default: null },
+  teamLink: { type: String, default: null, index: true },
   projectReport: { type: String, required: true },
   productMd: { type: String, required: true },
 
