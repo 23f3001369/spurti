@@ -415,13 +415,12 @@ api.post('/standup/commit/:id/settle', async (req, res) => {
 api.get('/journey/state', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (!isVibeEligible(student)) return res.json({ eligible: false });
-  res.json(await buildJourneyState(student));
+  res.json(await buildJourneyState(student));   // My Journey is universal (Phase 1); Commitments stays gated
 });
 
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for My Journey.' });
+  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
   await saveJourneyPlan(student.email, req.body || {});
   res.json(await buildJourneyState(student));
 });
