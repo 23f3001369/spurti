@@ -7,6 +7,7 @@ const peerReviewSubmissionSchema = new mongoose.Schema({
 
   prLink: { type: String, required: true },
   teamLink: { type: String, default: null, index: true },
+  resolvedPrUrl: { type: String, default: null },
   projectReport: { type: String, required: true },
   productMd: { type: String, required: true },
 

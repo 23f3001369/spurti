@@ -824,17 +824,24 @@ api.post('/peer-review/submit', async (req, res) => {
 
     const raw = prLink.trim().toLowerCase();
     let teamLink;
+    let resolvedPrUrl;
     if (/\/pull[s]?\/(\d+)/.test(raw)) {
-      teamLink = 'pr-' + raw.match(/\/pull[s]?\/(\d+)/)[1];
+      const num = raw.match(/\/pull[s]?\/(\d+)/)[1];
+      teamLink = 'pr-' + num;
+      resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${num}`;
     } else if (/^\d+$/.test(raw)) {
       teamLink = 'pr-' + raw;
+      resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${raw}`;
     } else if (/team-/.test(raw)) {
       const parts = raw.replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '').replace(/[?#].*$/, '').split('/');
       teamLink = parts[parts.length - 1];
+      resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${teamLink}`;
     } else if (/^[0-9a-f]{10,}$/.test(raw)) {
       teamLink = 'team-' + raw;
+      resolvedPrUrl = `https://github.com/vicharanashala/team-${raw}`;
     } else {
       teamLink = raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
+      resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${raw}`;
     }
 
     const submission = await PeerReviewSubmission.create({
@@ -843,6 +850,7 @@ api.post('/peer-review/submit', async (req, res) => {
       studentName: student.name,
       prLink,
       teamLink,
+      resolvedPrUrl,
       projectReport,
       productMd,
       status: 'submitted'
@@ -918,7 +926,7 @@ api.get('/peer-review/to-review', async (req, res) => {
     const availableSubmissions = await PeerReviewSubmission.find({
       ...excludeFilter,
       status: { $in: ['submitted', 'under_review'] }
-    }).select('studentName studentEmail prLink submittedAt reviewCount').lean();
+    }).select('studentName studentEmail prLink resolvedPrUrl submittedAt reviewCount').lean();
 
     res.json({
       canReview: true,
@@ -931,6 +939,7 @@ api.get('/peer-review/to-review', async (req, res) => {
         studentName: s.studentName,
         maskedEmail: maskEmail(s.studentEmail),
         prLink: s.prLink,
+        resolvedPrUrl: s.resolvedPrUrl,
         teamLink: s.teamLink,
         submittedAt: s.submittedAt,
         reviewCount: s.reviewCount
@@ -990,7 +999,7 @@ api.post('/peer-review/start/:submissionId', async (req, res) => {
       success: true,
       review: {
         _id: review._id, reviewerNumber: review.reviewerNumber,
-        submission: { prLink: submission.prLink, projectReport: submission.projectReport, productMd: submission.productMd, studentName: submission.studentName },
+        submission: { prLink: submission.prLink, resolvedPrUrl: submission.resolvedPrUrl, projectReport: submission.projectReport, productMd: submission.productMd, studentName: submission.studentName },
         rubric: PEER_REVIEW_RUBRIC, maxPoints: PEER_REVIEW_MAX_POINTS
       }
     });
@@ -1139,7 +1148,7 @@ api.get('/admin/peer-review/submissions', adminGuard, async (req, res) => {
     const submissions = await PeerReviewSubmission.find().sort({ submittedAt: -1 }).lean();
     res.json(submissions.map(s => ({
       _id: s._id, studentName: s.studentName, studentEmail: s.studentEmail, prLink: s.prLink,
-      teamLink: s.teamLink, submittedAt: s.submittedAt, status: s.status, reviewCount: s.reviewCount,
+      resolvedPrUrl: s.resolvedPrUrl, teamLink: s.teamLink, submittedAt: s.submittedAt, status: s.status, reviewCount: s.reviewCount,
       averageScore: s.averageScore, totalPoints: s.totalPoints, spAwarded: s.spAwarded
     })));
   } catch (err) {

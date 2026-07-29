@@ -2,31 +2,39 @@ import mongoose from 'mongoose';
 import { MONGO_URI } from '../config.js';
 import PeerReviewSubmission from '../models/PeerReviewSubmission.js';
 
-function computeTeamLink(prLink) {
+function computeFields(prLink) {
   const raw = prLink.trim().toLowerCase();
+  let teamLink, resolvedPrUrl;
   if (/\/pull[s]?\/(\d+)/.test(raw)) {
-    return 'pr-' + raw.match(/\/pull[s]?\/(\d+)/)[1];
+    const num = raw.match(/\/pull[s]?\/(\d+)/)[1];
+    teamLink = 'pr-' + num;
+    resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${num}`;
   } else if (/^\d+$/.test(raw)) {
-    return 'pr-' + raw;
+    teamLink = 'pr-' + raw;
+    resolvedPrUrl = `https://github.com/vicharanashala/crowd-source-faq/pull/${raw}`;
   } else if (/team-/.test(raw)) {
     const parts = raw.replace(/^https?:\/\/github\.com\//, '').replace(/\/+$/, '').replace(/[?#].*$/, '').split('/');
-    return parts[parts.length - 1];
+    teamLink = parts[parts.length - 1];
+    resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${teamLink}`;
   } else if (/^[0-9a-f]{10,}$/.test(raw)) {
-    return 'team-' + raw;
+    teamLink = 'team-' + raw;
+    resolvedPrUrl = `https://github.com/vicharanashala/team-${raw}`;
   } else {
-    return raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
+    teamLink = raw.replace(/\/+$/, '').replace(/[?#].*$/, '');
+    resolvedPrUrl = raw.startsWith('http') ? raw : `https://github.com/vicharanashala/${raw}`;
   }
+  return { teamLink, resolvedPrUrl };
 }
 
 async function main() {
   await mongoose.connect(MONGO_URI);
-  const all = await PeerReviewSubmission.find({ teamLink: null }).lean();
-  console.log(`Found ${all.length} submissions without teamLink`);
+  const all = await PeerReviewSubmission.find({ $or: [{ teamLink: null }, { resolvedPrUrl: null }] }).lean();
+  console.log(`Found ${all.length} submissions missing teamLink or resolvedPrUrl`);
 
   let updated = 0;
   for (const sub of all) {
-    const teamLink = computeTeamLink(sub.prLink);
-    await PeerReviewSubmission.updateOne({ _id: sub._id }, { $set: { teamLink } });
+    const { teamLink, resolvedPrUrl } = computeFields(sub.prLink);
+    await PeerReviewSubmission.updateOne({ _id: sub._id }, { $set: { teamLink, resolvedPrUrl } });
     updated++;
   }
 

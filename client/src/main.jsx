@@ -1769,7 +1769,7 @@ function ReviewList({ submissions, completedReviewCount, onStartReview, loading 
           {submissions.map(s => (
             <div className="review-card" key={s._id}>
               <h4>{s.studentName}</h4>
-              <p><strong>PR:</strong> <a href={s.prLink} target="_blank" rel="noopener noreferrer">{s.prLink}</a></p>
+              <p><strong>PR:</strong> <a href={s.resolvedPrUrl || s.prLink} target="_blank" rel="noopener noreferrer">{s.prLink}</a></p>
               <p className="muted">Submitted: {new Date(s.submittedAt).toLocaleDateString()}</p>
               <button className="primary small" onClick={() => onStartReview(s._id)} disabled={loading}>
                 {mandatoryDone ? 'Review (Optional)' : 'Start Review'}
@@ -1787,12 +1787,10 @@ function linkTypeInfo(link) {
   if (/\/pull[s]?\/(\d+)/.test(s))
     return { type: 'pull-request', label: 'Pull Request', tip: 'This is a team PR. View the code changes, read the description, and check the diff. Team members share the same PR — evaluate the team\'s collective work as presented here.' };
   if (/^\d+$/.test(s))
-    return { type: 'pull-number', label: 'PR #' + s, tip: 'Only a PR number was submitted. Open github.com/vicharanashala/crowd-source-faq/pull/' + s + ' to view the actual PR, or ask the student for the full link if unclear.' };
+    return { type: 'pull-number', label: 'PR #' + s, tip: 'Only a PR number was submitted — a full PR link has been generated for you above.' };
   if (/team-/.test(s) || /^[0-9a-f]{10,}$/.test(s))
     return { type: 'team-repo', label: 'Team Repository', tip: 'This is a team repository. Browse the code in the repo link above. Since it\'s a shared team repo, evaluate the student\'s specific contributions based on the project report and product.md.' };
-  if (s.startsWith('https://') || s.startsWith('http://'))
-    return { type: 'fork', label: 'Personal Fork / Other Link', tip: 'This appears to be a personal fork or external link. Evaluate the code as-is — the student is working independently on their own copy.' };
-  return { type: 'other', label: 'Link', tip: 'Review the submission using the provided link, project report, and product.md.' };
+  return { type: 'fork', label: 'Link', tip: 'This appears to be a personal fork or external link. Evaluate the code as-is — the student is working independently on their own copy.' };
 }
 
 function PeerReviewForm({ review, rubric, responses, setResponses, onSubmit, submitting }) {
@@ -1809,7 +1807,7 @@ function PeerReviewForm({ review, rubric, responses, setResponses, onSubmit, sub
     <div className="peer-review-form">
       <div className="review-header">
         <h3>Review: {review.submission?.studentName}'s Project</h3>
-        <a href={review.submission?.prLink} target="_blank" rel="noopener noreferrer" className="primary small">View →</a>
+        <a href={review.submission?.resolvedPrUrl || review.submission?.prLink} target="_blank" rel="noopener noreferrer" className="primary small">View →</a>
       </div>
 
       <div className="review-guidance">
