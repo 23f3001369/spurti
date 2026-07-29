@@ -391,13 +391,10 @@ api.get('/standup/state', async (req, res) => {
   res.json(await buildStandupState(student));
 });
 
-api.post('/standup/commit', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for standup commitments.' });
-  const { tierKey, multiplier } = req.body || {};
-  const r = await placeStandup(student, { tierKey, multiplier });
-  if (r.error) return res.status(400).json({ error: r.error });
-  res.json(await buildStandupState(student));
+api.post('/standup/commit', async (_req, res) => {
+  // PAUSED: standups moved to YouTube Live and the attendance module is being
+  // reworked — no new standup commitments until the new attendance tracking lands.
+  return res.status(403).json({ error: 'Standup commitments are paused while attendance is reworked for YouTube Live.' });
 });
 
 // DEMO: resolve a standup commitment (no live weekly settlement cron yet).
