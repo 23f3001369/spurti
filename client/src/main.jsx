@@ -814,7 +814,7 @@ function netFor(b) { return b.status === 'won' ? b.potentialWin - b.stake : -(b.
 // engine (stake debited → HIT wins it back multiplied / MISS loses a penalty); only
 // the target metric differs. ViBe is live; the other three land one by one.
 const COMMITMENT_TYPES = [
-  { key: 'vibe',    name: 'ViBe courses',        blurb: 'Pledge to raise your current course’s completion by X% before a deadline.', ready: true },
+  { key: 'vibe',    name: 'ViBe courses',        blurb: 'ViBe commitments are temporarily on hold — we’re reconnecting the ViBe course-completion feed. They’ll be back up soon.', ready: false },
   { key: 'standup', name: 'Standups',            blurb: 'Standup commitments are paused — standups have moved to YouTube Live and the attendance module is being reworked. They’ll return once the new attendance tracking is ready.', ready: false },
   { key: 'spa',     name: 'SPA — Matrix Mystics', blurb: 'Pledge to solve N of the 53 problems by a date.',                          ready: false },
   { key: 'project', name: 'Projects',            blurb: 'Pledge to raise / merge N pull requests by a date.',                        ready: false }
@@ -838,7 +838,7 @@ function Commitments({ student, initialPhase }) {
       </section>
       {active.ready
         ? (active.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
-        : <section className="panel"><p className="cm-soon">{active.blurb}{active.key !== 'standup' && <><br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</>}</p></section>}
+        : <section className="panel"><p className="cm-soon">{active.blurb}{!['standup', 'vibe'].includes(active.key) && <><br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</>}</p></section>}
     </div>
   );
 }

@@ -308,49 +308,16 @@ api.get('/vibe/state', async (req, res) => {
   res.json(await buildVibeState(student));
 });
 
-api.post('/vibe/bet', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for ViBe Goals.' });
-  const { course, goalPct, stake, multiplier, deadline } = req.body || {};
-  const state = await buildVibeState(student);
-  const v = validateBet({ state, course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, deadline });
-  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
-  const c = courseByKey(course);
-  // debit the stake now (the "cost of the bet"), visible in the SP Bank
-  await applySpDelta(student.email, -(+stake),
-    `Staked ${stake} SP on ViBe goal: +${goalPct}% ${c ? c.name : course} (${multiplier}×)`);
-  await Commitment.create({
-    email: student.email, type: 'vibe', debited: true,
-    course, goalPct: +goalPct, baselinePct: v.baselinePct,
-    deadline: new Date(deadline), stake: +stake, multiplier: +multiplier,
-    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss, status: 'active',
-    label: `+${goalPct}% ${c ? c.name : course} (stake ${stake} @ ${multiplier}×)`
-  });
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.post('/vibe/bet', async (_req, res) => {
+  // ON HOLD: ViBe commitments are paused — the ViBe completion feed (leaderboard API)
+  // is unavailable, so bets can't be verified or settled. No new bets can be placed
+  // (nothing is staked/debited) until the feed is restored.
+  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
 });
 
-api.put('/vibe/bet/:id', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible.' });
-  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
-  if (!bet) return res.status(404).json({ error: 'No active bet to edit.' });
-  const { goalPct, stake, multiplier } = req.body || {};   // deadline & course are NOT editable
-  const state = await buildVibeState(student);
-  const v = validateBet({ state, course: bet.course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, ignoreActive: true });
-  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
-  // reconcile the already-debited stake: refund the difference (old − new)
-  const stakeDiff = bet.stake - (+stake);
-  if (stakeDiff !== 0) {
-    const c = courseByKey(bet.course);
-    await applySpDelta(student.email, stakeDiff,
-      `ViBe goal edited — stake ${bet.stake}→${stake} on +${goalPct}% ${c ? c.name : bet.course}`);
-  }
-  Object.assign(bet, { goalPct: +goalPct, stake: +stake, multiplier: +multiplier,
-    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss });
-  await bet.save();
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.put('/vibe/bet/:id', async (_req, res) => {
+  // ON HOLD: see POST /vibe/bet.
+  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
 });
 
 // DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
