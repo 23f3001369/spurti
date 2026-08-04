@@ -80,6 +80,24 @@ const GRACE_DATE = '2026-06-06'; // exceptional: 1 min join = full att + full po
 // the frozen `zoom_polls` mirror (participation) exactly as history has it — so
 // old poll SP is never disturbed. Same date as the evening attendance cutover.
 const SPANDAN_CUTOFF = process.env.SPANDAN_CUTOFF || EVENING_CUTOVER;
+// ── Hybrid attendance (Spandan correctness) from Day 64 ───────────────────────
+// From ATT_HYBRID_CUTOVER the daily standup runs on Spandan with NO Zoom room, so
+// there is no presence feed. Attendance is instead sourced from Spandan poll
+// CORRECTNESS: attendedMinutes = min(60, round(correct/pollsLaunched*100)) -> 60%
+// correct = a full 60-min session, then the same 10/5/3/0 tier on minutes/60.
+// Special non-quiz nights (V-Talks, celebrations) have no polls -> fall back to
+// Zoom presence clipped to their OFFICIAL window (SPECIAL_WINDOW_IST override,
+// since the raw Zoom span overstates it). Day <=63 attendance is untouched.
+// Minutes reach attendancerecords (the 3600-min journey goal) via
+// sync-attendance-records.js parsing the "present X of Y min (Z%)" reason.
+const ATT_HYBRID_CUTOVER = process.env.ATT_HYBRID_CUTOVER || '2026-07-29'; // Day 64
+const ATT_SESSION_MIN = 60;               // each standup session = 60 min (3600 total)
+const SPECIAL_WINDOW_IST = {
+  '2026-07-29': { start: '21:00', end: '22:00' }, // Day 64 Gurupurnima Special
+  // Day 66 V-Talk 06 (31 Jul) is INTENTIONALLY omitted: it was a webinar and its
+  // zoom_attendance has only 3 distinct emails (host/panelists), not the 250
+  // attendees — no per-student data exists to credit. Do not re-add without data.
+};
 const STAFF = new Set([
   'dled@iitrpr.ac.in', 'prakash.hegade@gmail.com',
   'sudarshansudarshan@gmail.com', 'sudarshan@iitrpr.ac.in', 'rajankrsna@gmail.com',
@@ -99,9 +117,12 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
-// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded, no cap.
+// act_query_reviews.peer.submittedAnswerHistory), self-answers excluded.
+// Anti-farming: answers the admin REJECTED or MARKED_UNWORTHY earn nothing
+// (unreviewed + approved still count), and total query SP is capped per student.
 // Answering only — asking a question earns nothing.
-const QUERY_UNIT = 5;
+const QUERY_UNIT = 5, QUERY_CAP = 200;   // +5 SP / distinct query, cap 200 → max 40 queries
+const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
 
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
@@ -154,14 +175,22 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const byDate = {}; for (const m of meetings) (byDate[m.date] = byDate[m.date] || []).push(m);
   const sessions = [];
   for (const date of Object.keys(byDate).sort()) {
-    const mandatory = byDate[date].filter((m) => isMandatory(m.topic) && (m.participantsCount || 0) >= 10);
+    // Special sessions (V-Talks/celebrations) aren't "mandatory" by topic (no
+    // "stand"/"orientation"; often literally "Special"), so on a SPECIAL_WINDOW_IST
+    // date the manual allowlist is the authorization — accept any >=10-participant
+    // meeting and let the window-overlap pick the right one.
+    const special = !!SPECIAL_WINDOW_IST[date];
+    const mandatory = byDate[date].filter((m) => (special || isMandatory(m.topic)) && (m.participantsCount || 0) >= 10);
     if (!mandatory.length) continue;
     let first, wStart, wEnd;
     if (date >= EVENING_CUTOVER) {
       // evening standup: fixed [20:05, 21:00] IST window; pick the mandatory meeting
       // that overlaps it most so a leftover all-day/morning room can't steal the slot.
-      wStart = utcFromISTDate(date, EVENING_WSTART_IST);
-      const wCap = utcFromISTDate(date, EVENING_WEND_IST);
+      // Special sessions (SPECIAL_WINDOW_IST) override the window to their official
+      // start/end (raw Zoom span overstates it — e.g. Gurupurnima Day 64 = 21:00-22:00).
+      const sw = SPECIAL_WINDOW_IST[date];
+      wStart = utcFromISTDate(date, sw ? sw.start : EVENING_WSTART_IST);
+      const wCap = utcFromISTDate(date, sw ? sw.end : EVENING_WEND_IST);
       const scored = mandatory.map((m) => {
         const ms = new Date(m.startTime).getTime(), me = new Date(m.endTime).getTime();
         return { m, ov: Math.max(0, Math.min(me, wCap) - Math.max(ms, wStart)) };
@@ -200,6 +229,24 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         reason: `${label} (${ddmon(sp.date)}): ${pct}% of day's top poll score -> ${d > 0 ? '+' : ''}${d} SP (correctness-based).` });
     }
   };
+  // Hybrid attendance from a Spandan quiz night: attendedMinutes = min(60,
+  // round(correct/pollsLaunched*100)); 60% correct = full 60-min session; then the
+  // same 10/5/3/0 tier on minutes/60. Reason carries "present X of 60 min (Z%)" so
+  // sync-attendance-records.js folds the minutes into the 3600 journey goal.
+  const spandanAttByDate = new Map(); // date -> sp, only for dates the hybrid owns
+  for (const [date, sp] of spandanByDate) if (date >= ATT_HYBRID_CUTOVER) spandanAttByDate.set(date, sp);
+  const scoreSpandanAttendance = (sp, label) => {
+    const Q = sp.totalQuestions || (sp.questions || []).length || 0; if (!Q) return;
+    for (const x of sp.students || []) {
+      const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
+      const mins = Math.min(ATT_SESSION_MIN, Math.round((x.correctCount || 0) / Q * 100));
+      const pct = Math.round(mins / ATT_SESSION_MIN * 1000) / 10;
+      const d = tier(pct);
+      touch(e, x.studentName).rows.push({ date: sp.date, order: 1, cat: 'attendance', delta: d,
+        reason: `${label} (${ddmon(sp.date)}): present ${mins} of ${ATT_SESSION_MIN} min (${pct}%) via ${x.correctCount || 0}/${Q} correct polls -> ${d > 0 ? '+' : ''}${d} SP.` });
+      const o = students.get(e); if (!o.firstAtt || sp.date < o.firstAtt) o.firstAtt = sp.date;
+    }
+  };
 
   for (const s of sessions) {
     const winMin = Math.round((s.wEnd - s.wStart) / 60000);
@@ -216,7 +263,10 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       if (!o.name && p.name) o.name = p.name;
     }
     for (const o of segByEmail.values()) { if (o.fj != null && o.ll != null) { const a = Math.max(o.fj, s.wStart), b = Math.min(o.ll, s.wEnd); if (b > a) o.secs = (b - a) / 1000; } }
-    for (const [e, v] of segByEmail) {
+    // Skip Zoom attendance where the Spandan hybrid owns the date (Spandan quiz
+    // night) so a leftover Zoom room can't double-credit; special/no-poll nights
+    // (e.g. Gurupurnima Day 64) are NOT in spandanAttByDate and score here.
+    if (!spandanAttByDate.has(s.date)) for (const [e, v] of segByEmail) {
       const mins = (s.date === GRACE_DATE && v.secs > 0) ? winMin : Math.min(winMin, Math.round(v.secs / 60)); const pct = winMin ? Math.round(mins / winMin * 1000) / 10 : 0; const d = tier(pct);
       touch(e, v.name).rows.push({ date: s.date, order: 1, cat: 'attendance', delta: d, reason: `${s.label} (${ddmon(s.date)}): present ${mins} of ${winMin} min (${pct}%) within official ${istHHMM(s.wStart)}-${istHHMM(s.wEnd)} IST window -> ${d > 0 ? '+' : ''}${d} SP.` });
       const o = students.get(e); if (!o.firstAtt || s.date < o.firstAtt) o.firstAtt = s.date;
@@ -242,6 +292,11 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
 
   // Spandan poll days with no mandatory evening session still earn poll SP (label from the Day number).
   for (const [, sp] of spandanByDate) scoreSpandanPoll(sp, 'Day ' + sp.dayNumber);
+
+  // Hybrid attendance pass: from ATT_HYBRID_CUTOVER (Day 64), Spandan quiz nights
+  // earn attendance from poll correctness (no Zoom standup room those days). Zoom
+  // attendance for these dates was skipped above, so no double credit.
+  for (const [, sp] of spandanAttByDate) scoreSpandanAttendance(sp, 'Day ' + sp.dayNumber);
 
   // 3b. SPA → per-canon validated learn/teach events (dated) + integrity flags.
   //     emailToCanon is fully built by now, so we can fold aliases correctly.
@@ -281,8 +336,9 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
   for (const q of await sak.collection('act_query_reviews').find(
         { 'peer.submittedAnswerHistory.0': { $exists: true } },
-        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1 } }).toArray()) {
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1 } }).toArray()) {
     const askerId = String(q.userId);
+    if (QUERY_BAD_ACTIONS.includes(q.peer?.review?.action)) continue; // admin-flagged bad answer earns nothing
     const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
     const seen = new Set();
     for (let uid of (q.peer.submittedAnswerHistory || [])) {
@@ -352,13 +408,23 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
         reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
     }
-    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per day.
+    // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
+    // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
     const qDates = queryByCanon.get(cand);
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
-      for (const [d, n] of qByDay) rows.push({ date: d, order: 4, cat: 'query', delta: n * QUERY_UNIT,
-        reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${n * QUERY_UNIT} SP.` });
+      let qUsed = 0;
+      for (const d of [...qByDay.keys()].sort()) {
+        if (qUsed >= QUERY_CAP) break;
+        const n = qByDay.get(d);
+        let delta = n * QUERY_UNIT;
+        if (qUsed + delta > QUERY_CAP) delta = QUERY_CAP - qUsed;
+        qUsed += delta;
+        const capNote = qUsed >= QUERY_CAP ? ` (query SP capped at ${QUERY_CAP})` : '';
+        rows.push({ date: d, order: 4, cat: 'query', delta,
+          reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
+      }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
