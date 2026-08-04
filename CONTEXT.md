@@ -153,6 +153,26 @@ commitments** (bet SP on a course %-by-deadline; win/lose the stake), **My
 Journey** goals incl. the **3,600-min standup goal**, **Levels / Trophy Leagues /
 Legend** (derived by `sync-levels.cjs`), and the **SP trajectory** snapshot.
 
+## Leaderboards — cached boards
+
+Replaces the old single all-time list. Curated boards are **precomputed** into
+`leaderboardsnapshots` (one doc per board, holding the FULL sorted list so the API
+can return the top 50 AND the caller's own rank even outside it):
+- **Windows:** `week` (fixed **Mon 00:00 IST reset**) and `all` (all-time).
+- **Categories:** `total` + per-category `attendance` / `poll` / `spa` (combined
+  learn+teach) / `query`. Weekly boards rank by SP *earned in the window*;
+  category boards by SP *from that category*; all-time-total by `students.totalSp`.
+- **Scope:** global, plus **cohort** (onboarding `leaderboardGroup`) for the total
+  board.
+- **No email** on student-facing boards (name + level + SP only).
+
+Built by `server/services/leaderboards.js` (`computeAndStoreLeaderboards`) via
+`server/scripts/buildLeaderboards.js`, wired into `sp-refresh.sh` (step 3b) — so
+boards are never staler than the SP data. Served by
+`GET /api/leaderboard/board?window&category&scope` → `{ rows: top50, me: {rank,sp} }`.
+Client: `LeaderboardPanel` (a preset dropdown). Population = `activeFilter`
+(`status ≠ excused`), identical to the rest of the app.
+
 > NOTE: session labels are now `Day N (DD Mon)` / `Orientation (15 May)`
 > (produced by the pipeline), NOT the old `"15 May Morning"` form still listed
 > in `server/config.js SESSION_LABELS`. The display path in `server/services/sp.js`
