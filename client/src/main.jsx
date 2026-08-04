@@ -695,6 +695,12 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   }
   return (
     <div className="jr-goal">
+      {!goal.pending && goal.progressPct != null && (
+        <>
+          <span className="jr-goal-meta">{metric}</span>
+          <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
+        </>
+      )}
       <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
         🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
       </span>
