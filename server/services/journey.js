@@ -137,11 +137,10 @@ function phaseGoal({ targetDate, current = null, target = null, unit = '%', pend
   const known = !pending && current != null && target != null;
   const complete = known && current >= target;
   let status = 'none';
-  if (t) {
-    if (complete) status = 'achieved';
-    else if (t.getTime() < today.getTime()) status = 'missed';
-    else status = 'active';
-  }
+  // Already at/over target -> 'achieved' even if no target date was ever set, so
+  // the client hides the goal-setting UI (can't set a goal on a done phase).
+  if (complete) status = 'achieved';
+  else if (t) status = t.getTime() < today.getTime() ? 'missed' : 'active';
   const daysLeft = t ? Math.max(0, Math.round((t.getTime() - today.getTime()) / DAY_MS)) : null;
   const progressPct = known ? Math.min(100, Math.round((current / target) * 100)) : null;
   const remaining = known ? Math.max(0, target - current) : null;
@@ -171,11 +170,18 @@ function phaseGoal({ targetDate, current = null, target = null, unit = '%', pend
 export async function saveJourneyPlan(email, incoming = {}) {
   const existing = await JourneyPlan.findOne({ email }).lean();
   const today = startOfToday();
+  // Can't set a standup goal once the 3600-min target is already met (achieved).
+  let standupDone = false;
+  if (incoming.standupBy) {
+    const att = await AttendanceRecord.find({ email }).lean();
+    standupDone = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0) >= STANDUP_MINUTES_TARGET;
+  }
   const set = {};
   for (const f of ['standupBy', 'vibeBy', 'spaBy', 'projectBy']) {
     const cur = existing?.[f] ? new Date(existing[f]) : null;
     const locked = cur && cur.getTime() >= today.getTime();   // active future target → locked
     if (locked) continue;
+    if (f === 'standupBy' && standupDone) continue;           // already achieved → not settable
     if (Object.prototype.hasOwnProperty.call(incoming, f)) set[f] = incoming[f] ? new Date(incoming[f]) : null;
   }
   if (Object.keys(set).length) await JourneyPlan.updateOne({ email }, { $set: set }, { upsert: true });
