@@ -296,7 +296,7 @@ function StudentView({ profile, onBack }) {
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
     </main>
   );
@@ -418,28 +418,66 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
-  const [type, setType] = useState('overall');
-  const rows = type === 'overall' ? overall : group;
+// Curated leaderboard presets → each maps to a cached board (window/category/scope).
+const LB_PRESETS = [
+  { key: 'week-total',        label: 'This Week',                          window: 'week', category: 'total',      scope: 'all' },
+  { key: 'week-total-cohort', label: 'This Week — My Cohort',             window: 'week', category: 'total',      scope: 'cohort' },
+  { key: 'all-total',         label: 'All-Time',                          window: 'all',  category: 'total',      scope: 'all' },
+  { key: 'all-total-cohort',  label: 'All-Time — My Cohort',             window: 'all',  category: 'total',      scope: 'cohort' },
+  { key: 'week-attendance',   label: '🏅 Best Attendance — This Week',    window: 'week', category: 'attendance', scope: 'all' },
+  { key: 'all-attendance',    label: '🏅 Best Attendance — All-Time',     window: 'all',  category: 'attendance', scope: 'all' },
+  { key: 'week-poll',         label: '🎯 Poll Champions — This Week',      window: 'week', category: 'poll',       scope: 'all' },
+  { key: 'all-poll',          label: '🎯 Poll Champions — All-Time',       window: 'all',  category: 'poll',       scope: 'all' },
+  { key: 'week-spa',          label: '🧑‍🏫 Top SPA — This Week',           window: 'week', category: 'spa',        scope: 'all' },
+  { key: 'all-spa',           label: '🧑‍🏫 Top SPA — All-Time',            window: 'all',  category: 'spa',        scope: 'all' },
+  { key: 'week-query',        label: '💬 Top Query Answerers — This Week', window: 'week', category: 'query',      scope: 'all' },
+  { key: 'all-query',         label: '💬 Top Query Answerers — All-Time',  window: 'all',  category: 'query',      scope: 'all' },
+];
+
+function LeaderboardPanel({ student }) {
+  const [presetKey, setPresetKey] = useState('week-total');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const preset = LB_PRESETS.find(p => p.key === presetKey);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) { setData(d); setLoading(false); } })
+      .catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [presetKey, student.email]);
+  const rows = data?.rows || [];
+  const me = data?.me || null;
+  const meOutside = me && !rows.some(r => r.studentId === student._id);
   return (
     <section className="panel">
       <div className="panel-head">
         <h2>Leaderboard</h2>
-        <select value={type} onChange={e => setType(e.target.value)}>
-          <option value="overall">Overall Leaderboard</option>
-          <option value="my_onboarding_group">My Onboarding Group</option>
+        <select value={presetKey} onChange={e => setPresetKey(e.target.value)}>
+          {LB_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
       </div>
-      {type === 'my_onboarding_group' && groupLabel &&
-        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
-          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+      {preset.window === 'week' && data?.weekLabel && <p className="muted lb-week">Week of {data.weekLabel} · resets Monday</p>}
+      {loading ? <p className="muted">Loading…</p> : rows.length === 0 ? <p className="muted">No entries yet.</p> : (
+        <>
+          <table className="table lb-table">
+            <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
+                <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {me && (
+            <div className="lb-me">
+              You: <b>#{me.rank}</b> · {me.sp} SP
+              {meOutside && <span className="muted"> — {preset.window === 'week' ? 'earn more this week to climb' : 'keep going to climb'}</span>}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }

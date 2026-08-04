@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
@@ -435,6 +436,28 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
+});
+
+// Cached weekly/all-time/category/cohort boards (built by buildLeaderboards.js).
+// window=week|all, category=total|attendance|poll|spa|query, scope=all|cohort.
+// Returns the top 50 + the requesting student's own rank/SP (even if outside it).
+api.get('/leaderboard/board', async (req, res) => {
+  const student = await vibeStudent(req);
+  const window = ['week', 'all'].includes(req.query.window) ? req.query.window : 'week';
+  const category = ['total', 'attendance', 'poll', 'spa', 'query'].includes(req.query.category) ? req.query.category : 'total';
+  // Cohort scope only exists for the 'total' board; category boards are global.
+  const wantCohort = req.query.scope === 'cohort' && category === 'total' && student?.leaderboardGroup;
+  const boardKey = wantCohort ? `${window}:total:group:${student.leaderboardGroup}` : `${window}:${category}:all`;
+  const board = await LeaderboardSnapshot.findOne({ boardKey }).lean();
+  if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
+  const meId = student ? String(student._id) : null;
+  const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
+  res.json({
+    window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
+    weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
+    rows: board.rows.slice(0, 50),
+    me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
+  });
 });
 
 api.post('/ping', async (req, res) => {
