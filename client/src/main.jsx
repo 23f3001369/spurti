@@ -290,12 +290,14 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
-        ['leaderboard','Leaderboard']]} />
+        ['leaderboard','Leaderboard'],
+        ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
       {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'faq' && <FaqTab />}
     </main>
   );
 }
@@ -548,6 +550,48 @@ function Sparkline({ points }) {
         return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
       })}
     </div>
+  );
+}
+
+// Student-facing FAQ — reflects the CURRENT SP rules (banded attendance/poll,
+// SPA, query answering, ViBe commitments, positive-only). Keep in sync with the
+// live rubric; edit this array to add/change questions.
+const FAQ_ITEMS = [
+  { q: 'What are Spurti Points (SP)?', a: 'SP measure your engagement and consistency in the programme — not your marks. Every active intern starts with 100 SP on their start date and earns more through participation.' },
+  { q: 'How do I earn SP?', a: 'By attending standups, doing the session polls, peer teaching and learning (SPA), answering other students’ queries, and completing ViBe course commitments. Each shows up as its own category in your SP Bank.' },
+  { q: 'How is attendance SP calculated?', a: 'By how much of the session’s official window you attend: ≥90% → +10 SP, 75–89% → +5, 50–74% → +3, under 50% → 0. Attendance never subtracts SP.' },
+  { q: 'How does attendance work on the evening quiz standups?', a: 'Those run on the Spandan classroom, so attendance is measured from your poll answers: getting about 60% of the launched questions correct counts as a full 60-minute session, scaling down from there.' },
+  { q: 'How is poll SP calculated?', a: 'Poll SP is based on how well you did relative to the day’s top scorer, then banded 10/5/3/0. Just being present isn’t enough — answering correctly earns more.' },
+  { q: 'What are SPA points?', a: 'SPA rewards peer teaching and learning: +5 SP for each validated question you learn (up to 50) and +8 SP for each peer you validly teach (up to 30). Only validated endorsements count.' },
+  { q: 'How do I earn SP for answering queries?', a: 'You get +5 SP for each distinct peer query you answer, up to a total of 200 SP. Low-effort or admin-rejected answers do not earn SP.' },
+  { q: 'What are ViBe commitments?', a: 'You can stake some SP on finishing a course to a target percentage by a deadline. Hit your goal and you win SP; miss it and you lose the staked amount.' },
+  { q: 'What is My Journey and the 3,600-minute goal?', a: 'My Journey tracks your progress across standups, ViBe, SPA and projects. The standup goal is to reach 3,600 cumulative minutes — you can set a target date to stay on pace, and the bar shows minutes achieved vs required.' },
+  { q: 'Can my SP go down?', a: 'Attendance and polls never subtract SP — the lowest they give is 0. SP only decreases if you lose a ViBe stake or an SPA integrity (fraud/audit) penalty is applied.' },
+  { q: 'What is the SP Bank?', a: 'It’s your full ledger — every SP change with its date, reason, and running balance. Read it session by session to see how your total was built.' },
+  { q: 'What are the leaderboard and levels?', a: 'The leaderboard ranks active students by SP, and levels/leagues reflect your standing. They show engagement and consistency, not academic marks.' },
+  { q: 'I did something but my SP hasn’t updated — why?', a: 'Scores are recomputed on a schedule (about every 6 hours), so new attendance, polls or endorsements can take a little time to appear.' },
+  { q: 'Why is a session missing from my SP?', a: 'Common reasons: it was before your internship start date, you were excused, the email you joined with doesn’t match your record, or that day hasn’t been processed yet.' },
+  { q: 'I joined with a different email — what do I do?', a: 'Always join with your registered email. If you used another one, ask the team to add it as an alternate email so your attendance and polls link to your account.' },
+  { q: 'Why can’t I search my SP directly?', a: 'For privacy, open Spurti from your Samagama dashboard — that way you only ever see your own record.' },
+];
+
+function FaqTab() {
+  const [open, setOpen] = useState(0);
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>FAQ</h2></div>
+      <p className="muted faq-intro">Tap a question to see the answer.</p>
+      <div className="faq-list">
+        {FAQ_ITEMS.map((item, i) => (
+          <div className={`faq-item ${open === i ? 'open' : ''}`} key={i}>
+            <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}>
+              <span>{item.q}</span><span className="faq-caret">{open === i ? '–' : '+'}</span>
+            </button>
+            {open === i && <p className="faq-a">{item.a}</p>}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

@@ -688,3 +688,14 @@ input {
 .cm-body { padding: 4px 14px 14px; border-top: 1px solid var(--line); }
 .cm-body .vg { margin-top: 8px; }
 .cm-soon { color: var(--muted); font-size: 14px; line-height: 1.6; padding: 10px 2px; }
+
+/* FAQ accordion tab (one answer open at a time) */
+.faq-intro { font-size: 12.5px; margin: 0 0 10px; }
+.faq-list { display: flex; flex-direction: column; gap: 8px; }
+.faq-item { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.faq-item.open { border-color: var(--primary); }
+.faq-q { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left; background: none; border: none; padding: 12px 14px; font-size: 13.5px; font-weight: 700; color: var(--text); cursor: pointer; }
+.faq-item.open .faq-q { color: var(--primary); }
+.faq-caret { font-size: 18px; font-weight: 800; line-height: 1; color: var(--muted); flex: 0 0 auto; }
+.faq-item.open .faq-caret { color: var(--primary); }
+.faq-a { margin: 0; padding: 0 14px 14px; font-size: 13px; line-height: 1.55; color: var(--muted); }
