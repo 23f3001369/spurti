@@ -1,7 +1,14 @@
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import LeaderboardSnapshot from '../models/LeaderboardSnapshot.js';
+import Achievement from '../models/Achievement.js';
 import { levelFor } from './levels.js';
+
+const CAT_LABEL = { total: 'Overall', attendance: 'Best Attendance', poll: 'Poll Champions', spa: 'Top SPA', query: 'Top Query Answerers' };
+function boardTitle(b) {
+  const win = b.window === 'week' ? `This Week (${b.weekLabel})` : 'All-Time';
+  return `${CAT_LABEL[b.category]} · ${win}${b.scope === 'group' ? ' — Cohort' : ''}`;
+}
 
 // Category boards beyond the "total" board. Combined SPA (learn + teach) is one
 // category. `total` = sum of all categories in the window.
@@ -55,10 +62,18 @@ export async function computeAndStoreLeaderboards() {
   const allMap = await sumByStudentCat({});
 
   const levelOf = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
-  const build = (subset, valueOf) => subset
-    .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOf(s), sp: Math.round(valueOf(String(s._id))) }))
-    .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name))
-    .map((r, i) => ({ ...r, rank: i + 1 }));
+  // Standard competition ("1224") ranking: equal SP shares a rank, and the next
+  // distinct SP jumps past the tie (1,2,2,4 … 1,2,2,2,2,6).
+  const build = (subset, valueOf) => {
+    const sorted = subset
+      .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOf(s), sp: Math.round(valueOf(String(s._id))) }))
+      .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name));
+    let rank = 0, prevSp = null;
+    return sorted.map((r, i) => {
+      if (r.sp !== prevSp) { rank = i + 1; prevSp = r.sp; }
+      return { ...r, rank };
+    });
+  };
 
   const wTotal = (sid) => (weekMap.get(sid)?.total) || 0;
   const wCat = (cat) => (sid) => (weekMap.get(sid)?.cat[cat]) || 0;
@@ -93,5 +108,27 @@ export async function computeAndStoreLeaderboards() {
   await Promise.all(boards.map((b) => LeaderboardSnapshot.updateOne({ boardKey: b.boardKey }, { $set: b }, { upsert: true })));
   await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
 
-  return { boards: boards.length, groups: groups.length, weekStart, weekLabel: label, students: students.length };
+  // Award permanent rank achievements (idempotent; earnedAt keeps the first date).
+  // #1 on any board — but only when the top is genuinely exclusive (tie group ≤ 3),
+  // so a mass tie (e.g. everyone at the attendance cap) doesn't dilute "#1".
+  // Plus Top 10 on the all-time overall board.
+  const TIE_MAX = 3;
+  const ops = [];
+  const add = (studentId, achId, icon, title, subtitle) => ops.push({ updateOne: {
+    filter: { studentId, achId },
+    update: { $setOnInsert: { studentId, achId, icon, title, subtitle, earnedAt: now } },
+    upsert: true } });
+  for (const b of boards) {
+    const wk = b.window === 'week' ? ':' + weekStart.toISOString().slice(0, 10) : '';
+    const firsts = b.rows.filter((r) => r.rank === 1);
+    if (firsts.length && firsts.length <= TIE_MAX) {
+      for (const r of firsts) add(r.studentId, `fp:${b.boardKey}${wk}`, '🥇', `#1 — ${boardTitle(b)}`, `${r.sp} SP`);
+    }
+    if (b.boardKey === 'all:total:all') {
+      for (const r of b.rows) { if (r.rank > 10) break; if (r.rank !== 1) add(r.studentId, 'top10:all:total', '🏅', 'Top 10 — Overall', 'All-time overall leaderboard'); }
+    }
+  }
+  if (ops.length) await Achievement.bulkWrite(ops, { ordered: false });
+
+  return { boards: boards.length, groups: groups.length, achievementOps: ops.length, weekStart, weekLabel: label, students: students.length };
 }

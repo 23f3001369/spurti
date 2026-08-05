@@ -13,6 +13,7 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
+import Achievement from './models/Achievement.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
@@ -458,6 +459,25 @@ api.get('/leaderboard/board', async (req, res) => {
     rows: board.rows.slice(0, 50),
     me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
   });
+});
+
+// A student's achievements: persisted rank achievements (#1 on a board, Top 10)
+// merged with derived monotonic ones (Legend, level milestone, 3600-min club).
+api.get('/achievements', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.json({ achievements: [] });
+  const sid = String(student._id);
+  const derived = [];
+  const hi = Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0);
+  if (student.legendBadgeUnlocked || hi >= 1500) derived.push({ id: 'legend', icon: '🎖️', title: 'Legend Badge', subtitle: 'Reached 1,500 SP at least once', earnedAt: null });
+  const lvl = Math.floor(hi / 100);
+  for (const m of [25, 20, 15, 10, 5]) { if (lvl >= m) { derived.push({ id: `level${m}`, icon: '⭐', title: `Reached Level ${m}`, subtitle: `${m * 100}+ Spurti Points`, earnedAt: null }); break; } }
+  const mins = (await AttendanceRecord.aggregate([{ $match: { email: student.email } }, { $group: { _id: null, m: { $sum: '$attendedMinutes' } } }]))[0]?.m || 0;
+  if (mins >= 3600) derived.push({ id: 'club3600', icon: '🎯', title: '3,600-Minute Club', subtitle: 'Completed the standup attendance goal', earnedAt: null });
+
+  const stored = await Achievement.find({ studentId: sid }).sort({ earnedAt: -1 }).lean();
+  const list = [...derived, ...stored.map((a) => ({ id: a.achId, icon: a.icon, title: a.title, subtitle: a.subtitle, earnedAt: a.earnedAt }))];
+  res.json({ achievements: list });
 });
 
 api.post('/ping', async (req, res) => {
