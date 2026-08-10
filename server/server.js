@@ -297,7 +297,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
