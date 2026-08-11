@@ -382,7 +382,11 @@ api.get('/journey/state', async (req, res) => {
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
+  try {
+    await saveJourneyPlan(student, req.body || {});
+  } catch (err) {
+    return res.status(400).json({ error: err.message });   // invalid / out-of-bounds date
+  }
   res.json(await buildJourneyState(student));
 });
 
