@@ -114,6 +114,24 @@ const app = express();
 const api = express.Router();
 const liveViewers = new Map();
 
+// Express 4 does NOT forward rejections from async route handlers to the error
+// middleware — an unhandled rejection crashes the Node process (remote DoS; e.g.
+// a CastError from a malformed ObjectId in /confirm). Wrap every handler so sync
+// throws AND async rejections reach the single error handler registered below.
+for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+  const original = api[method].bind(api);
+  api[method] = (path, ...handlers) => original(path, ...handlers.map(handler => {
+    const wrapped = (req, res, next) => {
+      try {
+        return Promise.resolve(handler(req, res, next)).catch(next);
+      } catch (err) {
+        return next(err);
+      }
+    };
+    return wrapped;
+  }));
+}
+
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
@@ -413,6 +431,7 @@ api.get('/search', async (req, res) => {
 api.post('/confirm', async (req, res) => {
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
+  if (!mongoose.isValidObjectId(studentId)) return res.status(404).json({ error: 'Student not found' });
   const typed = normalizeEmail(email);
   const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -602,6 +621,7 @@ api.get('/admin/attendance', adminGuard, async (_req, res) => {
 });
 
 api.get('/admin/student/:id', adminGuard, async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: 'Student not found' });
   const student = await Student.findById(req.params.id).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   res.json(await studentPayload(student));
@@ -767,6 +787,19 @@ if (fs.existsSync(clientDist)) {
 } else {
   app.get('*', (_req, res) => res.status(404).send('Build the client first with npm run build.'));
 }
+
+// Global error handler — last middleware. Catches sync throws, async rejections
+// (forwarded via next(err) by the route wrapper above) and body-parser errors
+// (invalid JSON, oversized payload). Returns a clean JSON error instead of the
+// Express default HTML stack trace, and never crashes the process.
+app.use((err, _req, res, _next) => {
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request body too large' });
+  if (err?.name === 'CastError') return res.status(400).json({ error: 'Invalid identifier' });
+  if (err?.name === 'ValidationError') return res.status(400).json({ error: 'Invalid input', details: err.message });
+  console.error('[error]', err?.stack || err);
+  res.status(err?.statusCode || 500).json({ error: err?.message || 'Internal server error' });
+});
 
 mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
