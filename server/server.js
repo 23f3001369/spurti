@@ -391,13 +391,12 @@ api.get('/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) return res.json({ exact: false, matches: [] });
 
-  if (q.includes('@')) {
-    const email = normalizeEmail(q);
-    const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
-    if (student?.status === 'excused') return res.json(excusedPayload(student));
-    if (student) return res.json({ exact: true, profile: await studentPayload(student) });
-  }
-
+  // Search NEVER returns the full profile — only masked public rows. The caller
+  // must pick a record and prove email ownership via POST /confirm to unlock the
+  // full personal payload (transactions, poll responses, attendance, alt email).
+  // Previously an exact-email query short-circuited to studentPayload() with zero
+  // ownership check, leaking any student's private record to anyone who knew the
+  // email. (Regressed fix — see PR for the search-data-leak issue.)
   const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const matches = await Student.find({
     $or: [
