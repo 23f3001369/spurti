@@ -13,6 +13,9 @@ import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
 import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
+import Achievement from './models/Achievement.js';
+import ShareEvent from './models/ShareEvent.js';
+import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
@@ -24,6 +27,40 @@ import { buildTrajectoryState } from './services/trajectory.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
+// Saved achievement cards live outside the repo tree's tracked files; they are
+// regenerable, so losing them only costs the next share's og:image.
+const CARD_DIR = process.env.CARD_DIR || path.join(rootDir, 'server', 'data', 'cards');
+
+// Absolute origin for og: tags. PUBLIC_BASE_URL wins; otherwise trust the proxy
+// headers nginx sets, since the app itself only ever sees http on a local port.
+function publicBaseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) return String(process.env.PUBLIC_BASE_URL).replace(/\/+$/, '');
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  return `${String(proto).split(',')[0]}://${req.get('host')}`;
+}
+// Achievements ship dark: the tab is off for the cohort until ACHIEVEMENTS_ENABLED
+// flips, while ACHIEVEMENTS_EMAILS lets named accounts preview it on the live site
+// against real data. Sharing is a SEPARATE switch, so the tab can be visible with
+// the Share/Download buttons still off (or pulled back later without a redeploy).
+//   ACHIEVEMENTS_ENABLED=1
+//   ACHIEVEMENTS_EMAILS=someone@example.com,other@example.com
+//   ACHIEVEMENTS_SHARING=1
+const ACH_ENABLED = process.env.ACHIEVEMENTS_ENABLED === '1';
+const ACH_EMAILS = new Set(
+  String(process.env.ACHIEVEMENTS_EMAILS || '').split(',').map(normalizeEmail).filter(Boolean)
+);
+const ACH_SHARING = process.env.ACHIEVEMENTS_SHARING === '1';
+
+// A student sees the tab if the feature is on for everyone, or if either of their
+// addresses is on the preview list. Sharing additionally needs its own switch —
+// never the other way round, so there is no share button on a hidden tab.
+function achievementsAccess(student) {
+  const visible = ACH_ENABLED
+    || ACH_EMAILS.has(normalizeEmail(student?.email || ''))
+    || ACH_EMAILS.has(normalizeEmail(student?.alternateEmail || ''));
+  return { visible, sharing: visible && ACH_SHARING };
+}
+
 // Admin auth is env-only — NO hardcoded fallback. A committed default would be a
 // public credential (anyone reading the repo could authenticate). If either is
 // unset, admin endpoints fail closed (see isAdmin) rather than accept a known value.
@@ -460,6 +497,79 @@ api.get('/leaderboard/board', async (req, res) => {
   });
 });
 
+// A student's achievements, grouped one tile per board (plus milestones and the
+// nearest locked one). Podium places are awarded by the leaderboard build;
+// milestones are settled and persisted here on read.
+api.get('/achievements', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const access = achievementsAccess(student);
+  // Nothing is computed or persisted for a student who cannot see the tab —
+  // the milestone write in buildAchievementState only happens once it is on.
+  if (!access.visible) return res.json({ ...access, groups: [], locked: [], counts: {} });
+  res.json({
+    ...access,
+    student: { name: student.name, email: student.email, totalSp: student.totalSp, level: levelFor(Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0)) },
+    ...(await buildAchievementState(student))
+  });
+});
+
+// Public — this is what the QR on a shared card opens. No login, no PII beyond
+// the recipient's name and what they won.
+api.get('/verify/:code', async (req, res) => {
+  const result = await verifyAchievement(req.params.code, Student);
+  if (!result) return res.status(404).json({ valid: false });
+  res.json(result);
+});
+
+// The card is drawn in the browser, so the server never sees it unless the
+// client hands it over. It's stored once per achievement purely so the verify
+// page has an og:image — that's what makes a posted link show the card without
+// the student uploading anything.
+api.post('/share/card', async (req, res) => {
+  const { achId, dataUrl } = req.body || {};
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!achievementsAccess(student).sharing) return res.status(403).json({ error: 'Sharing is off' });
+  const ach = await Achievement.findOne({ studentId: String(student._id), achId }).lean();
+  if (!ach || !ach.verifyId) return res.status(404).json({ error: 'Achievement not found' });
+
+  const url = `${publicBaseUrl(req)}/spurti/cards/${ach.verifyId}.png`;
+  const file = path.join(CARD_DIR, `${ach.verifyId}.png`);
+  // Write once. Identity here is only the email in the request — the same weak
+  // model the rest of the app uses — so allowing overwrites would let anyone
+  // replace the picture that a student's public verify link previews.
+  if (fs.existsSync(file)) return res.json({ url, stored: false });
+
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) return res.status(400).json({ error: 'A PNG data URL is required' });
+  const buf = Buffer.from(m[1], 'base64');
+  if (buf.length > 1_500_000) return res.status(413).json({ error: 'Card image too large' });
+
+  fs.mkdirSync(CARD_DIR, { recursive: true });
+  fs.writeFileSync(file, buf);
+  res.json({ url, stored: true });
+});
+
+// Every share and download is logged so the admin can see who posts, how often,
+// and which achievements are actually worth posting.
+api.post('/share/track', async (req, res) => {
+  const { achId, platform } = req.body || {};
+  if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
+    return res.status(400).json({ error: 'achId and a valid platform required' });
+  }
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!achievementsAccess(student).sharing) return res.status(403).json({ error: 'Sharing is off' });
+  const ach = await Achievement.findOne({ studentId: String(student._id), achId }).lean();
+  if (!ach) return res.status(404).json({ error: 'Achievement not found' });
+  await ShareEvent.create({
+    studentId: String(student._id), email: student.email, name: student.name,
+    achId, title: ach.title, platform
+  });
+  res.json({ ok: true });
+});
+
 api.post('/ping', async (req, res) => {
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
@@ -632,12 +742,14 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events] = await Promise.all([
+  const [allStudents, sessions, attendance, transactions, events, shares, achievementCount] = await Promise.all([
     Student.find().lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
     AttendanceRecord.find().lean(),
     SPTransaction.find().lean(),
-    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean()
+    SessionEvent.find({ timestamp: { $gte: last30Days } }).lean(),
+    ShareEvent.find().lean(),
+    Achievement.countDocuments()
   ]);
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
   for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
@@ -748,9 +860,43 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       attendanceDebits: attendanceDebits.length,
       pollDebits: pollDebits.length,
       topDrops
-    }
+    },
+    sharing: shareSummary(shares, achievementCount, last7Days)
   });
 });
+
+// Who shares their achievement cards, how often, and which achievements travel.
+// `shareRate` is the honest headline: how many of the cards students hold have
+// ever actually been shared.
+function shareSummary(shares, achievementCount, since) {
+  const byStudent = new Map();
+  const byPlatform = {};
+  const byTitle = new Map();
+  const sharedAch = new Set();
+  for (const s of shares) {
+    byPlatform[s.platform] = (byPlatform[s.platform] || 0) + 1;
+    sharedAch.add(`${s.studentId}:${s.achId}`);
+    let row = byStudent.get(s.studentId);
+    if (!row) { row = { name: s.name, email: s.email, shares: 0, achievements: new Set(), last: s.at }; byStudent.set(s.studentId, row); }
+    row.shares += 1;
+    row.achievements.add(s.achId);
+    if (s.at > row.last) row.last = s.at;
+    byTitle.set(s.title || '—', (byTitle.get(s.title || '—') || 0) + 1);
+  }
+  return {
+    totalShares: shares.length,
+    sharers: byStudent.size,
+    last7Days: shares.filter((s) => s.at >= since).length,
+    achievementsHeld: achievementCount,
+    achievementsShared: sharedAch.size,
+    shareRatePct: achievementCount ? Math.round((sharedAch.size / achievementCount) * 100) : 0,
+    byPlatform,
+    topTitles: [...byTitle.entries()].map(([title, count]) => ({ title, count })).sort((a, b) => b.count - a.count).slice(0, 8),
+    topSharers: [...byStudent.values()]
+      .map((r) => ({ name: r.name, email: r.email, shares: r.shares, achievements: r.achievements.size, last: r.last }))
+      .sort((a, b) => b.shares - a.shares).slice(0, 15)
+  };
+}
 
 function last24Hours(now) {
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -759,9 +905,56 @@ function last24Hours(now) {
 app.use('/api', api);
 app.use('/spurti/api', api);
 
+// Saved achievement cards, served as plain files so LinkedIn's crawler can
+// fetch the og:image without a login.
+app.use('/spurti/cards', express.static(CARD_DIR, { maxAge: '30d' }));
+app.use('/cards', express.static(CARD_DIR, { maxAge: '30d' }));
+
+// The verify page is server-rendered ONLY to the extent of its meta tags: when a
+// student posts the link, LinkedIn/WhatsApp fetch it, read og:image, and show
+// the achievement card in the post itself — no upload, no download. The SPA
+// still boots from the same HTML and renders the page for humans.
+async function verifyPageHtml(req, code) {
+  // The bundle is built with a relative base, so "./assets/x.js" would resolve
+  // against /spurti/verify/<code>/ and 404. This page is two levels deep, so the
+  // asset paths have to be absolute.
+  const mount = req.path.startsWith('/spurti') ? '/spurti' : '';
+  const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
+    .replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
+  const result = await verifyAchievement(code, Student);
+  const base = publicBaseUrl(req);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const title = result ? `${result.title} — ${result.name}` : 'Spurti — achievement not found';
+  const desc = result
+    ? `${result.period} · ${result.programme}. Verified Spurti achievement.`
+    : 'This code does not match any achievement issued by Spurti.';
+  const img = result && fs.existsSync(path.join(CARD_DIR, `${result.verifyId}.png`))
+    ? `${base}/spurti/cards/${result.verifyId}.png`
+    : '';
+  const tags = [
+    `<meta property="og:type" content="article">`,
+    `<meta property="og:title" content="${esc(title)}">`,
+    `<meta property="og:description" content="${esc(desc)}">`,
+    `<meta property="og:url" content="${esc(`${base}/spurti/verify/${code}`)}">`,
+    `<meta name="twitter:card" content="${img ? 'summary_large_image' : 'summary'}">`,
+    img ? `<meta property="og:image" content="${esc(img)}">` : '',
+    img ? `<meta property="og:image:width" content="1080">` : '',
+    img ? `<meta property="og:image:height" content="1350">` : '',
+    `<title>${esc(title)}</title>`
+  ].filter(Boolean).join('\n  ');
+  return html.replace(/<title>.*?<\/title>/i, '').replace('</head>', `  ${tags}\n</head>`);
+}
+
 if (fs.existsSync(clientDist)) {
-  app.use('/spurti', express.static(clientDist));
-  app.use(express.static(clientDist));
+  app.use('/spurti', express.static(clientDist, { index: false }));
+  app.use(express.static(clientDist, { index: false }));
+  app.get(['/spurti/verify/:code', '/verify/:code'], async (req, res) => {
+    try {
+      res.type('html').send(await verifyPageHtml(req, req.params.code));
+    } catch {
+      res.sendFile(path.join(clientDist, 'index.html'));
+    }
+  });
   app.get('/spurti/*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
   app.get('*', (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
 } else {
