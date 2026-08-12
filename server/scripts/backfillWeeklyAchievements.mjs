@@ -19,6 +19,9 @@
 //   --min-participants N  a week needs this many people earning to count as a
 //                       real programme week (default 25). Date fields are not
 //                       trustworthy here; participation is.
+//   --programme-start YYYY-MM-DD  hard floor, default 2026-05-15 (this cohort's
+//                       actual start). Nothing before it is ever eligible, and
+//                       --from cannot reach back past it.
 //   --apply             actually write. Without it, nothing is written.
 //
 // Run from the repo root so .env is picked up. Safe to re-run: a placing that
@@ -90,19 +93,33 @@ if (!realWeeks.length) {
   console.error(`no week has ${MIN_PARTICIPANTS}+ participants — lower --min-participants`);
   process.exit(1);
 }
-const programmeStart = new Date(Math.min(...realWeeks));
-const skipped = [...weekCounts.entries()].filter(([t, n]) => n < MIN_PARTICIPANTS && t < programmeStart.getTime());
+// The known programme start. This cohort began 15 May 2026 — a fact, not
+// something to infer, so nothing before it is ever eligible however the data
+// reads. The participation check above stays as a second line of defence for
+// weeks that fall inside the programme but never really ran; pass
+// --programme-start for a different cohort.
+const PROGRAMME_START = new Date(`${arg('--programme-start', '2026-05-15')}T00:00:00+05:30`);
+const hardFloor = weekStartIST(PROGRAMME_START);
+
+const busiest = new Date(Math.min(...realWeeks));
+const programmeStart = new Date(Math.max(hardFloor.getTime(), busiest.getTime()));
+
+const skipped = [...weekCounts.entries()].filter(([t, n]) => t < programmeStart.getTime());
 if (skipped.length) {
-  console.log(`note: ${skipped.length} week(s) before the programme have under ${MIN_PARTICIPANTS} participants ` +
-              `and are skipped — ${skipped.map(([t, n]) => `${new Date(t).toISOString().slice(0, 10)} (${n})`).join(', ')}. ` +
-              `These are stray/mis-dated ledger rows, worth fixing separately.`);
+  const reason = (t, n) => `${new Date(t).toISOString().slice(0, 10)} (${n}` +
+    (t < hardFloor.getTime() ? ', pre-programme' : `, under ${MIN_PARTICIPANTS}`) + ')';
+  console.log(`note: ${skipped.length} week(s) rejected before the programme start ` +
+              `(${PROGRAMME_START.toISOString().slice(0, 10)}) — ${skipped.map(([t, n]) => reason(t, n)).join(', ')}. ` +
+              `Stray or mis-dated ledger rows; worth fixing separately.`);
 }
 
 const fromArg = arg('--from');
 const toArg = arg('--to');
+// An explicit --from can narrow the window but never reach back past the
+// programme start; a card must never claim a week the internship did not run.
 let from = weekStartIST(
-  fromArg ? new Date(`${fromArg}T00:00:00+05:30`)
-          : new Date(Math.max(new Date(firstTx[0].dateTime).getTime(), programmeStart?.getTime() ?? 0))
+  fromArg ? new Date(Math.max(new Date(`${fromArg}T00:00:00+05:30`).getTime(), programmeStart.getTime()))
+          : programmeStart
 );
 let to = toArg ? weekStartIST(new Date(`${toArg}T00:00:00+05:30`)) : lastCompleted;
 if (to > lastCompleted) {
