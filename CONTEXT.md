@@ -199,7 +199,8 @@ a PNG carrying a QR to a public verify page.
   in `/api/admin/analytics` — the point of the feature is knowing whether
   students actually post them.
 
-**Env switches** (`server/.env`, all default OFF — the feature ships dark):
+**Env switches** (repo-root `.env` — the app's cwd is the repo root; all default
+OFF, so the feature ships dark):
 
 | var | effect |
 | --- | --- |
