@@ -16,6 +16,9 @@
 //   --to   YYYY-MM-DD   last week to consider (default: the last COMPLETED week —
 //                       the week in progress is never awarded)
 //   --board total|poll|…  restrict to one board
+//   --min-participants N  a week needs this many people earning to count as a
+//                       real programme week (default 25). Date fields are not
+//                       trustworthy here; participation is.
 //   --apply             actually write. Without it, nothing is written.
 //
 // Run from the repo root so .env is picked up. Safe to re-run: a placing that
@@ -59,24 +62,40 @@ const lastCompleted = new Date(weekStartIST(new Date()).getTime() - WEEK);
 const firstTx = await SPTransaction.find({}, { dateTime: 1 }).sort({ dateTime: 1 }).limit(1).lean();
 if (!firstTx.length) { console.error('no SP transactions — nothing to backfill'); process.exit(1); }
 
-// The floor is the internship, NOT the earliest transaction. The ledger contains
-// rows dated well outside the programme — there is one in 2006 — and taking the
-// earliest of those as the start walked twenty years of empty weeks and minted a
-// card for a phantom "Week of Jul 31 – Aug 6, 2006". A card is a permanent public
-// credential; it should never be issued for a week the programme did not run.
-const firstStart = await Student.find(
-  { status: { $ne: 'excused' }, internshipStartDate: { $ne: null } },
-  { internshipStartDate: 1 }
-).sort({ internshipStartDate: 1 }).limit(1).lean();
-const programmeStart = firstStart.length ? new Date(firstStart[0].internshipStartDate) : null;
+// Where the programme really starts, decided by PARTICIPATION rather than by any
+// date field. Both obvious date sources are corruptible and in fact corrupt: the
+// ledger has a transaction dated 2006, and one student record carries
+// internshipStartDate 2006-08-01 (a 2026 typo), so taking the earliest of either
+// walked twenty years of empty weeks and offered a card for a phantom
+// "Week of Jul 31 – Aug 6, 2006". A single stray row cannot fake a week that
+// hundreds of people took part in, so the count is the trustworthy signal.
+//
+// Real weeks here run 870–1200 participants; the junk ones have 1, and the
+// pre-launch trickle has 7–14. Anything under the threshold is not a week the
+// programme ran, and no permanent public credential should be issued for it.
+const MIN_PARTICIPANTS = Number(arg('--min-participants', 25));
 
-const stray = await SPTransaction.countDocuments(
-  programmeStart ? { dateTime: { $lt: programmeStart } } : { _id: null }
+const weekCounts = new Map(
+  (await SPTransaction.aggregate([
+    { $group: {
+      _id: { $dateTrunc: { date: '$dateTime', unit: 'week', startOfWeek: 'monday', timezone: '+05:30' } },
+      students: { $addToSet: '$studentId' }
+    } },
+    { $project: { n: { $size: '$students' } } },
+    { $sort: { _id: 1 } }
+  ])).map((r) => [r._id.getTime(), r.n])
 );
-if (stray) {
-  console.log(`note: ${stray} SP transaction(s) are dated before the programme started ` +
-              `(${programmeStart.toISOString().slice(0, 10)}). They are excluded from the default range; ` +
-              `pass --from explicitly to include them. Worth investigating separately — it is a ledger issue, not an achievements one.`);
+const realWeeks = [...weekCounts.entries()].filter(([, n]) => n >= MIN_PARTICIPANTS).map(([t]) => t);
+if (!realWeeks.length) {
+  console.error(`no week has ${MIN_PARTICIPANTS}+ participants — lower --min-participants`);
+  process.exit(1);
+}
+const programmeStart = new Date(Math.min(...realWeeks));
+const skipped = [...weekCounts.entries()].filter(([t, n]) => n < MIN_PARTICIPANTS && t < programmeStart.getTime());
+if (skipped.length) {
+  console.log(`note: ${skipped.length} week(s) before the programme have under ${MIN_PARTICIPANTS} participants ` +
+              `and are skipped — ${skipped.map(([t, n]) => `${new Date(t).toISOString().slice(0, 10)} (${n})`).join(', ')}. ` +
+              `These are stray/mis-dated ledger rows, worth fixing separately.`);
 }
 
 const fromArg = arg('--from');
@@ -135,6 +154,13 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
 
   weeks += 1;
   if (!specs.length) { emptyWeeks += 1; continue; }
+  // A week inside the range can still be too thin to be a real programme week.
+  const participants = weekCounts.get(ws.getTime()) || 0;
+  if (participants < MIN_PARTICIPANTS) {
+    console.log(`${period}  (${wk})  → skipped, only ${participants} participant(s)`);
+    emptyWeeks += 1;
+    continue;
+  }
 
   console.log(`${period}  (${wk})  → ${specs.length} card${specs.length === 1 ? '' : 's'}`);
   for (const s of specs) {
