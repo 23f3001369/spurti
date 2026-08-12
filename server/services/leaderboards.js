@@ -278,7 +278,15 @@ async function trackReigns(boards, now) {
   const closedAwarded = [];
 
   for (const b of boards.filter((x) => x.window === 'all' && x.scope === 'all')) {
-    const leaders = b.rows.filter((r) => r.rank === 1 && r.sp > 0);
+    const tiedTop = b.rows.filter((r) => r.rank === 1 && r.sp > 0);
+    // The same TIE_MAX rule the podium uses: a top shared by more than three
+    // people is not a placing, and it is certainly not a reign. This is not
+    // hypothetical here — the SPA scheme caps at 50 questions x5 + 30 peers x8 =
+    // 490 SP, and 110 students sit on exactly that, so its all-time top is a
+    // permanent 110-way tie. Without this the first build opened 110 reigns on
+    // one board. When the top is that crowded nobody reigns: any open reign
+    // closes and none is opened.
+    const leaders = tiedTop.length > TIE_MAX ? [] : tiedTop;
     const open = await BoardReign.findOne({ board: b.category, to: null });
 
     // A tie keeps the sitting holder if they are still among the leaders —
