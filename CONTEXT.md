@@ -229,7 +229,6 @@ OFF, so the feature ships dark):
 | `ACHIEVEMENTS_ENABLED=1` | tab visible to the whole cohort. **Also** turns on tie-aware "1224" ranking in the leaderboard build and the minting of podium cards — with it off, the build ranks 1,2,3… exactly as before and awards nothing. |
 | `ACHIEVEMENTS_EMAILS=a@b.com,…` | named accounts see the tab while it is otherwise off (preview on live data) |
 | `ACHIEVEMENTS_SHARING=1` | Share/Download buttons, and the `share/card` + `share/track` endpoints. Requires the tab to be visible; never the other way round |
-| `ACHIEVEMENTS_ALLTIME=1` | mints **all-time** podium cards. Separate switch, default off — see below. Flip it **once, at programme end** |
 | `VERIFY_VIEW_LOG=0` | turns OFF verify-page view logging (defaults ON). The one switch here that defaults on, because the log is what makes reach measurable at all |
 
 **When podium cards are awarded.** Weekly cards come from the **last completed
@@ -240,14 +239,27 @@ replacing the previous holder — up to 28 students could each hold a permanent,
 independently verifiable "1st place, week of X" card for the same board. A
 finished week cannot move, so awarding from it yields one set of winners.
 
-All-time boards have the same failure and **no completed period to award from** —
-they only settle when the programme does. Hence `ACHIEVEMENTS_ALLTIME`, off by
-default. Flipping it mints one settled set from the standings **at that moment**
-and closes those titles for good, so flip it at the end; doing it early freezes
-whoever happens to be ahead. Both paths are backed by a settled-placing guard:
-once a placing has any holder it is closed, which still allows ties (awarded
-together in one batch) but stops a later challenger claiming the same title —
-including after a backdated transaction shifts a past week's standings.
+A settled-placing guard backs this up: once a placing has any holder it is
+closed. Ties still work, since they are awarded together in one batch, but a
+later challenger cannot claim a title already issued — including after a
+backdated transaction shifts a past week's standings.
+
+**All-time boards are not awarded as podiums at all.** They never settle while
+the programme runs, so an unqualified "1st place, All-time" would go to every
+successive leader in turn. Instead the top spot is a **dated reign**, recorded in
+`boardreign` (`board`, `studentId`, `from`, `to`, `peakSp`, `awarded`): "top of
+the Overall board, 15 Jul – 12 Aug 2026" is true of each holder, the spans do not
+overlap, and nobody's card is revoked when they are overtaken.
+
+- **1st only.** "Reigning champion" is a real idea; "was second for a while" is
+  not, and the places below the top shuffle constantly.
+- **A reign earns a card after 7 days.** The build runs four times a day and the
+  lead can change between runs early in a cohort, so without a floor a six-hour
+  blip would mint a permanent credential. Short reigns are still recorded — that
+  history is the only measure of leadership churn the programme has.
+- **Cards are minted while the reign is open**, reading "Since 15 Jul 2026", and
+  gain their end date when it closes. The PNG already posted keeps the older
+  wording, which was true when posted; the verify page stays current.
 
 Flipping any of them is a `.env` edit + PM2 restart — no rebuild, no redeploy.
 

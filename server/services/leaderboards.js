@@ -2,6 +2,7 @@ import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import LeaderboardSnapshot from '../models/LeaderboardSnapshot.js';
 import Achievement, { awardAchievements } from '../models/Achievement.js';
+import BoardReign from '../models/BoardReign.js';
 import { levelFor } from './levels.js';
 
 const CAT_LABEL = { total: 'Overall', attendance: 'Best Attendance', poll: 'Poll Champions', spa: 'Top SPA', query: 'Top Query Answerers' };
@@ -70,14 +71,10 @@ export async function computeAndStoreLeaderboards() {
   // unique 1,2,3… ranks and no cards. Read here, not at import, so the flag is
   // whatever the .env said when the process started, however it was started.
   const awardsOn = process.env.ACHIEVEMENTS_ENABLED === '1';
-  // All-time podiums are a SEPARATE switch, default off, because unlike a week
-  // an all-time board never settles while the programme is running. Awarding it
-  // live handed every successive leader their own permanent "1st place,
-  // All-time" card — three leaders, three cards, all verifying as genuine, none
-  // of them exclusive. There is no completed period to award from, so the only
-  // honest moment is one the operator picks: flip this at programme end and a
-  // single settled set is minted.
-  const allTimeOn = awardsOn && process.env.ACHIEVEMENTS_ALLTIME === '1';
+  // All-time boards are NOT awarded as plain podiums. They never settle while
+  // the programme runs, so an unqualified "1st place, All-time" would be handed
+  // to every successive leader in turn. They are handled as dated reigns
+  // instead — see trackReigns below.
   const weekStart = weekStartIST(now);
   const label = weekLabel(weekStart);
   // The week the cards are for. The boards on screen still show the week in
@@ -170,37 +167,31 @@ export async function computeAndStoreLeaderboards() {
 
     awardBoards = [
       { window: 'week', category: 'total', rows: build(students, pTotal) },
-      ...CATS.map((cat) => ({ window: 'week', category: cat, rows: build(students, pCat(cat)) })),
-      ...(allTimeOn
-        ? boards.filter((b) => b.window === 'all' && b.scope === 'all')
-            .map((b) => ({ window: 'all', category: b.category, rows: b.rows }))
-        : [])
+      ...CATS.map((cat) => ({ window: 'week', category: cat, rows: build(students, pCat(cat)) }))
     ];
 
     // Belt and braces against a placing being awarded twice with different
     // winners — a late backdated transaction could shift even a settled week's
-    // standings, and an all-time board moves whenever anyone earns. Once a
-    // placing has any holder it is closed, so ties (awarded together in one
-    // batch) still work while a later challenger cannot claim the same title.
+    // standings. Once a placing has any holder it is closed, so ties (awarded
+    // together in one batch) still work while a later challenger cannot claim
+    // the same title.
     const wk = weekKey(prevWeekStart);
     const already = await Achievement.find(
-      { $or: [{ achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: { $regex: '^rank:[^:]+:all:all:' } }] },
-      { achId: 1 }
+      { achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: 1 }
     ).lean();
     settled = new Set(already.map((a) => a.achId));
   }
 
   const add = (r, b, place) => {
-    const wk = b.window === 'week' ? weekKey(prevWeekStart) : 'all';
-    const achId = `rank:${b.category}:${b.window}:${wk}:${place}`;
+    const wk = weekKey(prevWeekStart);
+    const achId = `rank:${b.category}:week:${wk}:${place}`;
     if (settled.has(achId)) return;                  // this placing is already awarded
     ops.push({
       filter: { studentId: r.studentId, achId },
       doc: {
         studentId: r.studentId, achId, kind: 'rank', board: b.category, place,
         icon: PLACE_ICON[place], title: ACH_TITLE[b.category],
-        period: b.window === 'week' ? `Week of ${prevLabel}` : 'All-time',
-        periodKey: wk,
+        period: `Week of ${prevLabel}`, periodKey: wk,
         detail: `${r.sp} SP`, earnedAt: now
       }
     });
@@ -215,9 +206,104 @@ export async function computeAndStoreLeaderboards() {
   }
   if (ops.length) await awardAchievements(ops);
 
+  const reigns = awardsOn ? await trackReigns(boards, now) : { changes: 0, minted: 0 };
+
   return {
     boards: boards.length, groups: groups.length, achievementOps: ops.length,
     weekStart, weekLabel: label, awardedWeek: awardsOn ? prevLabel : null,
-    students: students.length
+    reigns, students: students.length
   };
+}
+
+const DAY = 86400000;
+// How long the top spot must be held before it is worth a card. The build runs
+// four times a day and early in a cohort the lead can change between runs, so
+// without a floor a six-hour blip would mint a permanent credential.
+const MIN_REIGN_MS = 7 * DAY;
+
+function istDate(d) {
+  const x = new Date(d.getTime() + IST_MS);
+  return `${x.getUTCDate()} ${MON[x.getUTCMonth()]}`;
+}
+function istYear(d) { return new Date(d.getTime() + IST_MS).getUTCFullYear(); }
+function reignPeriod(from, to) {
+  return to
+    ? `${istDate(from)} – ${istDate(to)} ${istYear(to)}`
+    : `Since ${istDate(from)} ${istYear(from)}`;
+}
+
+// Keeps `boardreign` in step with who currently tops each all-time board, and
+// mints a card once a reign has lasted long enough to mean something.
+//
+// Only 1st place has a reign: "reigning champion" is a real idea, while "was
+// second for a while" is not, and the places below the top shuffle constantly.
+async function trackReigns(boards, now) {
+  let changes = 0;
+  const ops = [];
+  const closedAwarded = [];
+
+  for (const b of boards.filter((x) => x.window === 'all' && x.scope === 'all')) {
+    const leaders = b.rows.filter((r) => r.rank === 1 && r.sp > 0);
+    const open = await BoardReign.findOne({ board: b.category, to: null });
+
+    // A tie keeps the sitting holder if they are still among the leaders —
+    // being caught up with is not the same as being overtaken.
+    const stillLeading = open && leaders.some((r) => r.studentId === open.studentId);
+
+    if (open && !stillLeading) {
+      open.to = now;
+      await open.save();
+      if (open.awarded) closedAwarded.push(open);
+      changes += 1;
+    }
+
+    if (stillLeading) {
+      const me = leaders.find((r) => r.studentId === open.studentId);
+      open.sp = me.sp;
+      open.peakSp = Math.max(open.peakSp || 0, me.sp);
+      await open.save();
+    } else {
+      for (const r of leaders) {
+        await BoardReign.create({
+          board: b.category, studentId: r.studentId, name: r.name,
+          from: now, to: null, sp: r.sp, peakSp: r.sp
+        });
+        changes += 1;
+      }
+    }
+  }
+
+  // Mint for any reign — open or closed — that has now lasted long enough.
+  const ripe = await BoardReign.find({ awarded: false });
+  for (const rg of ripe) {
+    const held = (rg.to ? rg.to.getTime() : now.getTime()) - rg.from.getTime();
+    if (held < MIN_REIGN_MS) continue;
+    const achId = `rank:${rg.board}:reign:${weekKey(rg.from)}:1`;
+    ops.push({
+      filter: { studentId: rg.studentId, achId },
+      doc: {
+        studentId: rg.studentId, achId, kind: 'rank', board: rg.board, place: 1,
+        icon: PLACE_ICON[1], title: ACH_TITLE[rg.board],
+        period: reignPeriod(rg.from, rg.to), periodKey: weekKey(rg.from),
+        detail: `${rg.peakSp || rg.sp} SP`, earnedAt: rg.from
+      }
+    });
+    rg.awarded = true;
+    rg.achId = achId;
+    await rg.save();
+  }
+  if (ops.length) await awardAchievements(ops);
+
+  // A reign that ends after its card was minted: the card said "Since 12 Aug"
+  // and must now read "12 Aug – 3 Sep". The already-posted PNG keeps the older
+  // wording, which was true when it was posted; the verify page is the record
+  // that stays current.
+  for (const rg of closedAwarded) {
+    await Achievement.updateOne(
+      { studentId: rg.studentId, achId: rg.achId },
+      { $set: { period: reignPeriod(rg.from, rg.to), detail: `${rg.peakSp || rg.sp} SP` } }
+    );
+  }
+
+  return { changes, minted: ops.length, closed: closedAwarded.length };
 }

@@ -1626,7 +1626,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
-      {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} />}
+      {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
@@ -1636,8 +1636,9 @@ function AdminView({ admin, auth, onBack }) {
 // Achievements & sharing. The organising idea is that a raw share count is a
 // vanity number — it goes up simply because more cards get minted — so every
 // figure here that can be a rate is one, with cards HELD as the denominator.
-function AdminAchievements({ data }) {
+function AdminAchievements({ data, reigns }) {
   if (!data) return <section className="panel empty">Loading achievement data…</section>;
+  const d = (x) => x ? new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
   const r = data.reach || {};
   const pct = (n) => `${n}%`;
   const hrs = data.medianHoursToShare;
@@ -1686,6 +1687,37 @@ function AdminAchievements({ data }) {
             {(data.byPlace || []).map(p => (
               <tr key={p.place}><td>{['', '1st', '2nd', '3rd'][p.place]}</td><td>{p.held}</td><td>{p.shares}</td><td><b>{pct(p.shareRatePct)}</b></td></tr>
             ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Board reigns</h2>
+          <span className="muted">Who has held the top of each all-time board, and for how long.</span>
+        </div>
+        <p className="muted">
+          An all-time board never settles while the programme runs, so the top spot is recorded as a dated
+          reign rather than an outright title. A reign earns a card once it has lasted <b>7 days</b>; shorter
+          ones are still kept here, which is what makes the churn visible.
+        </p>
+        <div className="ach-stats">
+          <div><span>Leadership changes</span><strong>{reigns?.total ?? 0}</strong></div>
+          <div><span>Median reign</span><strong>{reigns?.medianDays == null ? '—' : `${reigns.medianDays} d`}</strong><em>completed only</em></div>
+          <div><span>Currently reigning</span><strong>{reigns?.current?.length ?? 0}</strong><em>one per board</em></div>
+        </div>
+        <table className="table">
+          <thead><tr><th>Board</th><th>Holder</th><th>From</th><th>To</th><th>Days</th><th>SP</th><th>Card</th></tr></thead>
+          <tbody>
+            {(reigns?.history || []).map((r, i) => (
+              <tr key={i}>
+                <td>{r.board}</td><td>{r.name || '—'}</td><td>{d(r.from)}</td>
+                <td>{r.current ? <b>still reigning</b> : d(r.to)}</td>
+                <td>{r.days}</td><td>{r.sp}</td>
+                <td>{r.awarded ? 'yes' : <span className="muted">too short</span>}</td>
+              </tr>
+            ))}
+            {!(reigns?.history || []).length && <tr><td colSpan={7} className="muted">No one has topped a board yet.</td></tr>}
           </tbody>
         </table>
       </section>

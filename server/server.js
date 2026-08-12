@@ -16,6 +16,7 @@ import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
 import Achievement from './models/Achievement.js';
 import ShareEvent from './models/ShareEvent.js';
 import AchievementView, { isBot, uaFamilyOf, viewerDayHash } from './models/AchievementView.js';
+import BoardReign from './models/BoardReign.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
@@ -781,7 +782,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events, shares, achievements, views] = await Promise.all([
+  const [allStudents, sessions, attendance, transactions, events, shares, achievements, views, reigns] = await Promise.all([
     Student.find().lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
     AttendanceRecord.find().lean(),
@@ -791,7 +792,8 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     // The full rows, not a count: per-category share rates need the cards HELD
     // in each category as their denominator.
     Achievement.find({}, { achId: 1, kind: 1, board: 1, place: 1, studentId: 1, earnedAt: 1 }).lean(),
-    AchievementView.find({}, { bot: 1, board: 1, kind: 1, ref: 1, viewerDay: 1, found: 1 }).lean()
+    AchievementView.find({}, { bot: 1, board: 1, kind: 1, ref: 1, viewerDay: 1, found: 1 }).lean(),
+    BoardReign.find().sort({ from: -1 }).lean()
   ]);
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
   for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
@@ -903,7 +905,8 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       pollDebits: pollDebits.length,
       topDrops
     },
-    sharing: shareSummary(shares, achievements, views, last7Days)
+    sharing: shareSummary(shares, achievements, views, last7Days),
+    reigns: reignSummary(reigns)
   });
 });
 
@@ -1027,6 +1030,30 @@ function shareSummary(shares, achievements, views, since) {
     topSharers: [...byStudent.values()]
       .map((r) => ({ name: r.name, email: r.email, shares: r.shares, achievements: r.achievements.size, last: r.last }))
       .sort((a, b) => b.shares - a.shares).slice(0, 15)
+  };
+}
+
+// Who has held the top of each board and for how long. Short reigns are kept
+// even though they never earn a card — the churn is the interesting part.
+function reignSummary(reigns) {
+  const DAY = 86400000;
+  const rows = reigns.map((r) => ({
+    board: BOARD_LABEL[r.board] || r.board,
+    name: r.name, studentId: r.studentId,
+    from: r.from, to: r.to,
+    days: Math.max(0, Math.round((((r.to ? new Date(r.to) : new Date()) - new Date(r.from)) / DAY) * 10) / 10),
+    sp: r.peakSp || r.sp,
+    awarded: !!r.awarded,
+    current: !r.to
+  }));
+  const byBoard = {};
+  for (const r of rows) byBoard[r.board] = (byBoard[r.board] || 0) + 1;
+  return {
+    total: rows.length,
+    current: rows.filter((r) => r.current),
+    changesByBoard: Object.entries(byBoard).map(([board, n]) => ({ board, n })).sort((a, b) => b.n - a.n),
+    medianDays: median(rows.filter((r) => !r.current).map((r) => r.days)),
+    history: rows.slice(0, 40)
   };
 }
 
