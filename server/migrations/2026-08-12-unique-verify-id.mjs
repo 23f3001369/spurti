@@ -7,15 +7,21 @@
 // failure at startup, so without this script the app would come up looking
 // healthy with no unique index at all — the guarantee silently absent.
 //
-//   MONGO_URI=... node server/migrations/2026-08-12-unique-verify-id.mjs [--apply]
+// Run from the repo root, which is where dotenv looks for .env:
+//   node server/migrations/2026-08-12-unique-verify-id.mjs [--apply]
 //
 // Without --apply it only reports. Safe to re-run.
 
+import 'dotenv/config';
 import mongoose from 'mongoose';
 
 const APPLY = process.argv.includes('--apply');
 const URI = process.env.MONGO_URI;
-if (!URI) { console.error('MONGO_URI is required'); process.exit(1); }
+if (!URI) {
+  console.error('MONGO_URI is not set. Run this from the repo root so .env is picked up,');
+  console.error('or pass it explicitly: MONGO_URI=... node server/migrations/…');
+  process.exit(1);
+}
 
 await mongoose.connect(URI);
 const col = mongoose.connection.db.collection('achievements');
