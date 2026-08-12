@@ -45,8 +45,57 @@ function weekLabel(weekStartUtc) {
     : `${MON[s.getUTCMonth()]} ${s.getUTCDate()} – ${MON[e.getUTCMonth()]} ${e.getUTCDate()}`;
 }
 
+// A placing shared by more than this many people isn't a placing.
+const TIE_MAX = 3;
+
+const levelOfStudent = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
+
+// Sorted rows for a board. `tieAware` selects standard competition ("1224")
+// ranking — equal SP shares a rank and the next distinct SP jumps past the tie
+// (1,2,2,4). Display boards only use it once the feature is live; anything that
+// AWARDS must always use it, or a tie silently hands one of the tied students
+// a lower placing than the other.
+export function rankRows(subset, valueOf, tieAware) {
+  const sorted = subset
+    .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOfStudent(s), sp: Math.round(valueOf(String(s._id))) }))
+    .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name));
+  if (!tieAware) return sorted.map((r, i) => ({ ...r, rank: i + 1 }));
+  let rank = 0, prevSp = null;
+  return sorted.map((r, i) => {
+    if (r.sp !== prevSp) { rank = i + 1; prevSp = r.sp; }
+    return { ...r, rank };
+  });
+}
+
+// The podium cards a single week's board earns. Shared by the live build and
+// the backfill so the two cannot drift apart on what counts as a placing.
+// `settled` closes placings that already have a holder.
+export function weeklyPodiumSpecs({ rows, category, weekKey: wk, period, earnedAt, settled = new Set() }) {
+  const out = [];
+  for (const place of [1, 2, 3]) {
+    const tied = rows.filter((r) => r.rank === place);
+    // A placing needs a real score: the top of a table of zeroes is not a win.
+    if (!tied.length || tied.length > TIE_MAX || tied[0].sp <= 0) continue;
+    const achId = `rank:${category}:week:${wk}:${place}`;
+    if (settled.has(achId)) continue;
+    for (const r of tied) {
+      out.push({
+        filter: { studentId: r.studentId, achId },
+        doc: {
+          studentId: r.studentId, achId, kind: 'rank', board: category, place,
+          icon: PLACE_ICON[place], title: ACH_TITLE[category],
+          period, periodKey: wk, detail: `${r.sp} SP`, earnedAt
+        }
+      });
+    }
+  }
+  return out;
+}
+
+export { weekStartIST, weekKey, weekLabel, CATS };
+
 // Sum appliedDelta per (student, category) over a match window.
-async function sumByStudentCat(match) {
+export async function sumByStudentCat(match) {
   const rows = await SPTransaction.aggregate([
     { $match: match },
     { $group: { _id: { sid: '$studentId', cat: '$category' }, sp: { $sum: '$appliedDelta' } } }
@@ -90,20 +139,8 @@ export async function computeAndStoreLeaderboards() {
   const weekMap = await sumByStudentCat({ dateTime: { $gte: weekStart } });
   const allMap = await sumByStudentCat({});
 
-  const levelOf = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
-  // Standard competition ("1224") ranking: equal SP shares a rank, and the next
-  // distinct SP jumps past the tie (1,2,2,4 … 1,2,2,2,2,6).
-  const build = (subset, valueOf) => {
-    const sorted = subset
-      .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOf(s), sp: Math.round(valueOf(String(s._id))) }))
-      .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name));
-    if (!awardsOn) return sorted.map((r, i) => ({ ...r, rank: i + 1 }));
-    let rank = 0, prevSp = null;
-    return sorted.map((r, i) => {
-      if (r.sp !== prevSp) { rank = i + 1; prevSp = r.sp; }
-      return { ...r, rank };
-    });
-  };
+  // Tie-aware ranking only once the feature is live; see rankRows.
+  const build = (subset, valueOf) => rankRows(subset, valueOf, awardsOn);
 
   const wTotal = (sid) => (weekMap.get(sid)?.total) || 0;
   const wCat = (cat) => (sid) => (weekMap.get(sid)?.cat[cat]) || 0;
@@ -155,55 +192,33 @@ export async function computeAndStoreLeaderboards() {
   //    than double the weekly card volume for the least meaningful placing.
   //  · placings below 3rd — "7th on the Polls board this week" can be 7th out of
   //    a field of thirty, which isn't the same achievement as a podium.
-  const TIE_MAX = 3;      // a place shared by more than 3 people isn't a placing
-  const ops = [];
-  let awardBoards = [];
-  let settled = new Set();
+  let ops = [];
 
   if (awardsOn) {
     const prevWeekMap = await sumByStudentCat({ dateTime: { $gte: prevWeekStart, $lt: weekStart } });
     const pTotal = (sid) => (prevWeekMap.get(sid)?.total) || 0;
     const pCat = (cat) => (sid) => (prevWeekMap.get(sid)?.cat[cat]) || 0;
-
-    awardBoards = [
-      { window: 'week', category: 'total', rows: build(students, pTotal) },
-      ...CATS.map((cat) => ({ window: 'week', category: cat, rows: build(students, pCat(cat)) }))
-    ];
+    const wk = weekKey(prevWeekStart);
 
     // Belt and braces against a placing being awarded twice with different
     // winners — a late backdated transaction could shift even a settled week's
     // standings. Once a placing has any holder it is closed, so ties (awarded
     // together in one batch) still work while a later challenger cannot claim
     // the same title.
-    const wk = weekKey(prevWeekStart);
     const already = await Achievement.find(
       { achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: 1 }
     ).lean();
-    settled = new Set(already.map((a) => a.achId));
-  }
+    const settled = new Set(already.map((a) => a.achId));
 
-  const add = (r, b, place) => {
-    const wk = weekKey(prevWeekStart);
-    const achId = `rank:${b.category}:week:${wk}:${place}`;
-    if (settled.has(achId)) return;                  // this placing is already awarded
-    ops.push({
-      filter: { studentId: r.studentId, achId },
-      doc: {
-        studentId: r.studentId, achId, kind: 'rank', board: b.category, place,
-        icon: PLACE_ICON[place], title: ACH_TITLE[b.category],
-        period: `Week of ${prevLabel}`, periodKey: wk,
-        detail: `${r.sp} SP`, earnedAt: now
-      }
-    });
-  };
-  for (const b of awardBoards) {
-    for (const place of [1, 2, 3]) {
-      const tied = b.rows.filter((r) => r.rank === place);
-      // A placing needs a real score: the top of a table of zeroes is not a win.
-      if (!tied.length || tied.length > TIE_MAX || tied[0].sp <= 0) continue;
-      for (const r of tied) add(r, b, place);
+    const period = `Week of ${prevLabel}`;
+    for (const [category, valueOf] of [['total', pTotal], ...CATS.map((c) => [c, pCat(c)])]) {
+      ops.push(...weeklyPodiumSpecs({
+        rows: rankRows(students, valueOf, true),
+        category, weekKey: wk, period, earnedAt: now, settled
+      }));
     }
   }
+
   if (ops.length) await awardAchievements(ops);
 
   const reigns = awardsOn ? await trackReigns(boards, now) : { changes: 0, minted: 0 };
