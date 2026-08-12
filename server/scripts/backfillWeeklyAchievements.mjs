@@ -38,7 +38,7 @@ import SPTransaction from '../models/SPTransaction.js';
 import Achievement, { awardAchievements } from '../models/Achievement.js';
 import {
   rankRows, weeklyPodiumSpecs, sumByStudentCat, weeklyTotal,
-  weekStartIST, weekKey, weekLabel, CATS, WEEKLY_EXCLUDED_CATEGORIES
+  weekStartIST, weekKey, weekLabel, CATS, WEEKLY_EXCLUDED_CATEGORIES, AWARD_EXCLUDED_BOARDS
 } from '../services/leaderboards.js';
 
 const WEEK = 7 * 86400000;
@@ -50,7 +50,10 @@ const arg = (name, fallback = null) => {
 };
 const APPLY = process.argv.includes('--apply');
 const ONLY_BOARD = arg('--board');
-const BOARDS = ONLY_BOARD ? [ONLY_BOARD] : ['total', ...CATS];
+// An explicit --board can still target an excluded one deliberately; the
+// default list honours the exclusion.
+const BOARDS = ONLY_BOARD ? [ONLY_BOARD]
+  : ['total', ...CATS].filter((b) => !AWARD_EXCLUDED_BOARDS.includes(b));
 
 const URI = process.env.MONGO_URI;
 if (!URI) {
@@ -147,6 +150,7 @@ const held = new Set(
 console.log(`backfill ${weekKey(from)} … ${weekKey(to)}   boards: ${BOARDS.join(', ')}`);
 console.log(`${students.length} non-excused students, ${held.size} weekly placings already held`);
 console.log(`weekly Overall SP excludes: ${WEEKLY_EXCLUDED_CATEGORIES.join(', ')}`);
+if (AWARD_EXCLUDED_BOARDS.length) console.log(`boards minting no cards: ${AWARD_EXCLUDED_BOARDS.join(', ')}`);
 console.log(APPLY ? '\nMODE: APPLY — cards will be written\n' : '\nMODE: dry run — nothing will be written\n');
 
 const all = [];
