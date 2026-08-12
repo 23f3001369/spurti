@@ -1,4 +1,4 @@
-import Achievement, { newVerifyId } from '../models/Achievement.js';
+import Achievement, { awardAchievements } from '../models/Achievement.js';
 import AttendanceRecord from '../models/AttendanceRecord.js';
 import { levelFor } from './levels.js';
 
@@ -72,14 +72,14 @@ export async function buildAchievementState(student) {
 
   const toPersist = specs.filter((s) => s.earned);
   if (toPersist.length) {
-    await Achievement.bulkWrite(toPersist.map((s) => ({ updateOne: {
+    await awardAchievements(toPersist.map((s) => ({
       filter: { studentId: sid, achId: s.achId },
-      update: { $setOnInsert: {
+      doc: {
         studentId: sid, achId: s.achId, kind: 'milestone', board: '', place: 0,
-        icon: s.icon, title: s.title, period: s.period, detail: s.detail,
-        verifyId: newVerifyId(), earnedAt: new Date()
-      } },
-      upsert: true } })), { ordered: false });
+        icon: s.icon, title: s.title, period: s.period, periodKey: 'all',
+        detail: s.detail, earnedAt: new Date()
+      }
+    })));
   }
 
   const rows = await Achievement.find({ studentId: sid }).sort({ earnedAt: -1 }).lean();

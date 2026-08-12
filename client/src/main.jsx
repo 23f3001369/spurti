@@ -542,8 +542,10 @@ function AchievementTile({ group, me, open, onToggle, onShare, canShare }) {
   );
 }
 
-// Renders the actual PNG the student posts, and hands them the three ways out:
-// LinkedIn, WhatsApp, or just the file. Each one is logged.
+// Renders the actual PNG the student posts, and hands them the two ways out:
+// LinkedIn, or just the file. Each one is logged. WhatsApp was dropped — the
+// point of these cards is a public, checkable post, and a forward to a chat
+// thread is neither.
 // navigator.clipboard is secure-context only (https or localhost), so on any
 // plain-http origin it is simply absent and a copy would fail silently. The
 // textarea trick still works everywhere.
@@ -570,9 +572,17 @@ function ShareModal({ item, me, onClose }) {
   const [copied, setCopied] = useState(false);
   const verifyUrl = `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`;
   const [caption, setCaption] = useState('');
+  // Posting a card is a four-step job on LinkedIn and every step is easy to skip
+  // — most of all uploading the image, without which the post is a bare link.
+  // The tick is not paperwork: it is there to make the steps get read once.
+  const [readSteps, setReadSteps] = useState(false);
 
   useEffect(() => {
-    import('./shareCard.js').then(m => setCaption(m.shareCaption(item, false, verifyUrl)));
+    import('./shareCard.js').then(m => {
+      const text = m.shareCaption(item, verifyUrl);
+      setCaption(text);
+      setGenerated(text);
+    });
   }, [item.achId]);
 
   useEffect(() => {
@@ -594,10 +604,18 @@ function ShareModal({ item, me, onClose }) {
     return () => { live = false; };
   }, [item.achId]);
 
+  // `generated` is the caption as we wrote it; comparing against what's in the
+  // box at share time is the only way to know whether students take our framing
+  // or write their own.
+  const [generated, setGenerated] = useState('');
   const track = (platform) => fetch(`${API}/share/track`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: me.email, achId: item.achId, platform })
+    body: JSON.stringify({
+      email: me.email, achId: item.achId, platform,
+      captionEdited: !!generated && caption !== generated,
+      captionChars: caption.length
+    })
   }).catch(() => {});
 
   // Two ways to get the picture into the post without the student handling a file:
@@ -605,9 +623,8 @@ function ShareModal({ item, me, onClose }) {
   //  2. failing that, post the verify link and let the platform expand it into a
   //     preview of the card (that's what the og:image on /verify/:code is for)
   // Downloading is a fallback, not the route.
-  const share = async (platform) => {
-    const { shareCaption, dataUrlToFile } = await import('./shareCard.js');
-    const caption = shareCaption(item, platform === 'whatsapp', verifyUrl);
+  const share = async () => {
+    const { dataUrlToFile } = await import('./shareCard.js');
     const file = png ? dataUrlToFile(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`) : null;
 
     // Only phones get the share sheet. Desktop Chrome/Safari also advertise
@@ -624,16 +641,12 @@ function ShareModal({ item, me, onClose }) {
       }
     }
 
-    track(platform);
-    if (platform === 'linkedin') {
-      // LinkedIn cannot be handed post text by URL — it opens an empty composer
-      // whatever you pass. Copying first is what makes the paste possible.
-      const ok = await copyText(caption);
-      setCopied(ok);
-      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(verifyUrl)}`, '_blank', 'noopener');
-    } else if (platform === 'whatsapp') {
-      window.open(`https://wa.me/?text=${encodeURIComponent(caption)}`, '_blank', 'noopener');
-    }
+    track('linkedin');
+    // LinkedIn cannot be handed post text by URL — it opens an empty composer
+    // whatever you pass. Copying first is what makes the paste possible.
+    const ok = await copyText(caption);
+    setCopied(ok);
+    window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(verifyUrl)}`, '_blank', 'noopener');
   };
 
   const justDownload = async () => {
@@ -652,34 +665,46 @@ function ShareModal({ item, me, onClose }) {
         {error && <p className="muted">{error}</p>}
         {!png && !error && <p className="muted">Drawing your card…</p>}
         {png && <img className="share-preview" src={png} alt={`${item.title} — ${item.period}`} />}
-        <div className="share-actions">
-          <button className="primary" disabled={!png} onClick={() => share('linkedin')}>Share on LinkedIn</button>
-          <button className="wa" disabled={!png} onClick={() => share('whatsapp')}>Share on WhatsApp</button>
-          <button className="secondary" disabled={!png} onClick={justDownload}>Download card</button>
-        </div>
         <div className="caption-box">
           <div className="caption-head">
             <b>Your caption</b>
-            <button className="mini-copy" onClick={async () => setCopied(await copyText(caption))}>
+            <button className="mini-copy" onClick={async () => { track('copy'); setCopied(await copyText(caption)); }}>
               {copied ? 'Copied ✓' : 'Copy'}
             </button>
           </div>
-          <textarea value={caption} onChange={e => { setCaption(e.target.value); setCopied(false); }} rows={7} />
+          <textarea value={caption} onChange={e => { setCaption(e.target.value); setCopied(false); }} rows={12} />
           <p>LinkedIn always opens an empty box — paste this in with <b>Ctrl+V</b> (<b>Cmd+V</b> on Mac). Edit it first if you like.</p>
         </div>
 
-        <div className="tag-hint">
-          <b>Tag us in your post</b>
-          <p>In the LinkedIn box type <b>@Vicharanashala</b> and pick the lab page, then <b>@Sakshi</b> and pick her
-          from the list. Choosing from the list is what makes it a real tag — typed text alone doesn't reach us.</p>
-          <div className="tag-links">
-            <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
-            <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
-          </div>
+        <div className="post-howto">
+          <b>How to post this — read before you click</b>
+          <ol>
+            <li><b>Download the card first.</b> LinkedIn will not pick the picture up on its own; you attach it yourself in a moment.</li>
+            <li>Click <b>Share on LinkedIn</b>. Your caption is copied for you and the composer opens with your verify link already attached.</li>
+            <li><b>Add the card image to the post</b> — the photo button in the composer, then the file you just downloaded. Skip this and your post is only a link.</li>
+            <li><b>Paste the caption</b> (Ctrl+V / Cmd+V).</li>
+            <li><b>Tag us.</b> Type <b>@Vicharanashala</b> and pick the lab page, then <b>@Sakshi</b> and pick her from
+            the list. Picking from the dropdown is what makes it a real tag — typed text alone doesn't reach anyone.
+            <span className="tag-links">
+              <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
+              <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
+            </span></li>
+          </ol>
+          <label className="ack">
+            <input type="checkbox" checked={readSteps} onChange={e => setReadSteps(e.target.checked)} />
+            <span>I've read the steps — in particular that I add the image myself.</span>
+          </label>
         </div>
+
+        <div className="share-actions">
+          <button className="secondary" disabled={!png} onClick={justDownload}>Download card</button>
+          <button className="primary" disabled={!png || !readSteps} onClick={share}>Share on LinkedIn</button>
+        </div>
+
         <p className="muted share-note">
-          On a phone, Share hands the picture straight to the app you pick. On a computer it posts your verify link,
-          which shows the card in the post — and anyone who clicks it lands on proof the achievement is real.
+          On a phone, Share hands the picture straight to LinkedIn and you can skip step 3 — but samagama.in isn't
+          built for small screens, so this is probably a job for a computer. Either way the verify link travels with
+          the post: anyone who clicks it lands on proof the achievement is real.
         </p>
       </section>
     </div>
@@ -1571,7 +1596,8 @@ function AdminView({ admin, auth, onBack }) {
       const id = setInterval(loadActive, 10000);
       return () => clearInterval(id);
     }
-    if (tab === 'analytics' && !analytics) loadAnalytics();
+    // Both tabs read /admin/analytics — the sharing block rides along with it.
+    if ((tab === 'analytics' || tab === 'achievements') && !analytics) loadAnalytics();
   }, [tab]);
 
   return (
@@ -1581,7 +1607,7 @@ function AdminView({ admin, auth, onBack }) {
         <div><p className="eyebrow">Admin Dashboard</p><h1>Spurti Control Room</h1></div>
         <div className="score-card"><span>Yet to onboard</span><strong>{stats?.yetToOnboard ?? admin.yetToOnboard ?? 0}</strong><span className="divider">|</span><span>Active</span><strong>{stats?.activeStudents ?? admin.activeStudents ?? admin.students ?? 0}</strong><span className="divider">|</span><span>Excused</span><strong>{stats?.excusedStudents ?? admin.excusedStudents ?? 0}</strong><em>{stats?.transactions ?? admin.transactions ?? 0} txns</em></div>
       </header>
-      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['students','Students']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['leaderboard','Leaderboard'], ['attendance','Attendance'], ['live','Live'], ['analytics','Analytics'], ['achievements','Achievements'], ['students','Students']]} />
       {tab === 'leaderboard' && (
         <section className="panel">
           <div className="panel-head">
@@ -1600,9 +1626,151 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'attendance' && <AdminAttendance data={attendance} onStudent={loadStudent} />}
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
+      {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
+  );
+}
+
+// Achievements & sharing. The organising idea is that a raw share count is a
+// vanity number — it goes up simply because more cards get minted — so every
+// figure here that can be a rate is one, with cards HELD as the denominator.
+function AdminAchievements({ data, reigns }) {
+  if (!data) return <section className="panel empty">Loading achievement data…</section>;
+  const d = (x) => x ? new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+  const r = data.reach || {};
+  const pct = (n) => `${n}%`;
+  const hrs = data.medianHoursToShare;
+  const latency = hrs === null || hrs === undefined ? '—'
+    : hrs < 48 ? `${hrs} h` : `${Math.round(hrs / 24)} d`;
+
+  return (
+    <>
+      <section className="panel">
+        <h2>Achievements &amp; sharing</h2>
+        <div className="ach-stats">
+          <div><span>Cards held</span><strong>{data.achievementsHeld}</strong></div>
+          <div><span>Cards shared</span><strong>{data.achievementsShared}</strong><em>{pct(data.shareRatePct)} of held</em></div>
+          <div><span>Share actions</span><strong>{data.totalShares}</strong><em>{data.last7Days} in last 7 days</em></div>
+          <div><span>Students sharing</span><strong>{data.sharers}</strong></div>
+          <div><span>Median earn → share</span><strong>{latency}</strong></div>
+          <div><span>Captions rewritten</span><strong>{pct(data.captionEditedPct)}</strong></div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>By category</h2>
+          <span className="muted">Share rate = distinct cards shared ÷ cards held, so categories that mint more aren't flattered.</span>
+        </div>
+        <table className="table">
+          <thead><tr><th>Category</th><th>Held</th><th>Shared</th><th>Share rate</th><th>Share actions</th><th>Views</th></tr></thead>
+          <tbody>
+            {(data.categories || []).map(c => (
+              <tr key={c.key}>
+                <td>{c.label}</td><td>{c.held}</td><td>{c.sharedCards}</td>
+                <td><b>{pct(c.shareRatePct)}</b></td><td>{c.shares}</td><td>{c.views}</td>
+              </tr>
+            ))}
+            {!(data.categories || []).length && <tr><td colSpan={6} className="muted">No cards issued yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <h2>By placing</h2>
+        <p className="muted">Whether a 1st is posted more readily than a 3rd — all three carry the same title, so this is the only place the difference shows.</p>
+        <table className="table">
+          <thead><tr><th>Place</th><th>Held</th><th>Share actions</th><th>Share rate</th></tr></thead>
+          <tbody>
+            {(data.byPlace || []).map(p => (
+              <tr key={p.place}><td>{['', '1st', '2nd', '3rd'][p.place]}</td><td>{p.held}</td><td>{p.shares}</td><td><b>{pct(p.shareRatePct)}</b></td></tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Board reigns</h2>
+          <span className="muted">Who has held the top of each all-time board, and for how long.</span>
+        </div>
+        <p className="muted">
+          An all-time board never settles while the programme runs, so the top spot is recorded as a dated
+          reign rather than an outright title. A reign earns a card once it has lasted <b>7 days</b>; shorter
+          ones are still kept here, which is what makes the churn visible.
+        </p>
+        <div className="ach-stats">
+          <div><span>Leadership changes</span><strong>{reigns?.total ?? 0}</strong></div>
+          <div><span>Median reign</span><strong>{reigns?.medianDays == null ? '—' : `${reigns.medianDays} d`}</strong><em>completed only</em></div>
+          <div><span>Currently reigning</span><strong>{reigns?.current?.length ?? 0}</strong><em>one per board</em></div>
+        </div>
+        <table className="table">
+          <thead><tr><th>Board</th><th>Holder</th><th>From</th><th>To</th><th>Days</th><th>SP</th><th>Card</th></tr></thead>
+          <tbody>
+            {(reigns?.history || []).map((r, i) => (
+              <tr key={i}>
+                <td>{r.board}</td><td>{r.name || '—'}</td><td>{d(r.from)}</td>
+                <td>{r.current ? <b>still reigning</b> : d(r.to)}</td>
+                <td>{r.days}</td><td>{r.sp}</td>
+                <td>{r.awarded ? 'yes' : <span className="muted">too short</span>}</td>
+              </tr>
+            ))}
+            {!(reigns?.history || []).length && <tr><td colSpan={7} className="muted">No one has topped a board yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>Reach</h2>
+          <span className="muted">Did the posts get looked at?</span>
+        </div>
+        <div className="ach-stats">
+          <div><span>Verify page views</span><strong>{r.views ?? 0}</strong><em>humans only</em></div>
+          <div><span>Unique viewer-days</span><strong>{r.uniqueViewerDays ?? 0}</strong></div>
+          <div><span>Views per share</span><strong>{r.viewsPerShare ?? 0}</strong></div>
+          <div><span>Crawler hits</span><strong>{r.botViews ?? 0}</strong><em>excluded above</em></div>
+          <div><span>Bad codes</span><strong>{r.notFound ?? 0}</strong></div>
+        </div>
+        {!!(r.byRef || []).length && (
+          <table className="table">
+            <thead><tr><th>Came from</th><th>Views</th></tr></thead>
+            <tbody>{r.byRef.map(x => <tr key={x.ref}><td>{x.ref}</td><td>{x.count}</td></tr>)}</tbody>
+          </table>
+        )}
+        <p className="muted">
+          A viewer-day is one device on one day, counted through a hash that is thrown away nightly — it cannot
+          identify anyone and cannot follow the same person to the next day. Verify-page visitors are members of
+          the public, not study participants, so no IP or cookie is stored.
+        </p>
+      </section>
+
+      <section className="panel">
+        <h2>Where cards go</h2>
+        <div className="ach-stats">
+          {Object.entries(data.byPlatform || {}).map(([k, v]) => (
+            <div key={k}><span>{k}</span><strong>{v}</strong></div>
+          ))}
+          {!Object.keys(data.byPlatform || {}).length && <p className="muted">Nothing shared yet.</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Top sharers</h2>
+        <table className="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Share actions</th><th>Cards</th><th>Last</th></tr></thead>
+          <tbody>
+            {(data.topSharers || []).map(s => (
+              <tr key={s.email}><td>{s.name}</td><td>{s.email}</td><td>{s.shares}</td><td>{s.achievements}</td>
+                <td>{s.last ? new Date(s.last).toLocaleDateString('en-IN') : '—'}</td></tr>
+            ))}
+            {!(data.topSharers || []).length && <tr><td colSpan={5} className="muted">No shares yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
+    </>
   );
 }
 

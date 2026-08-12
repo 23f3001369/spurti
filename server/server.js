@@ -15,6 +15,8 @@ import SessionEvent from './models/SessionEvent.js';
 import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
 import Achievement from './models/Achievement.js';
 import ShareEvent from './models/ShareEvent.js';
+import AchievementView, { isBot, uaFamilyOf, viewerDayHash } from './models/AchievementView.js';
+import BoardReign from './models/BoardReign.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
@@ -522,6 +524,40 @@ api.get('/verify/:code', async (req, res) => {
   res.json(result);
 });
 
+// Records that a card was looked at. Fire-and-forget: a credential page must
+// never fail, or be slowed down, because analytics did.
+//
+// Deliberately not stored: the visitor's IP, any cookie, and the full referrer
+// (only its host). These are members of the public who followed a link, not
+// consented participants — see models/AchievementView.js. Set
+// VERIFY_VIEW_LOG=0 to switch the whole thing off.
+const VIEW_LOG_ON = process.env.VERIFY_VIEW_LOG !== '0';
+function logAchievementView(req, code, result) {
+  if (!VIEW_LOG_ON) return;
+  const verifyId = String(code || '').trim().toUpperCase();
+  const ua = req.get('user-agent') || '';
+  let ref = '';
+  try { ref = req.get('referer') ? new URL(req.get('referer')).host : ''; } catch { ref = ''; }
+  // The category is re-read here rather than added to verifyAchievement's
+  // return value: that payload is public JSON, and studentId has no business
+  // being in it just to make logging convenient.
+  (async () => {
+    const a = result ? await Achievement.findOne({ verifyId }, { achId: 1, studentId: 1, board: 1, kind: 1 }).lean() : null;
+    await AchievementView.create({
+      verifyId,
+      achId: a?.achId || '',
+      studentId: a?.studentId || '',
+      board: a?.board || '',
+      kind: a?.kind || '',
+      found: !!result,
+      ref,
+      uaFamily: uaFamilyOf(ua),
+      bot: isBot(ua),
+      viewerDay: viewerDayHash(req.ip, ua)
+    });
+  })().catch(() => { /* never let logging break a credential page */ });
+}
+
 // The card is drawn in the browser, so the server never sees it unless the
 // client hands it over. It's stored once per achievement purely so the verify
 // page has an og:image — that's what makes a posted link show the card without
@@ -554,7 +590,7 @@ api.post('/share/card', async (req, res) => {
 // Every share and download is logged so the admin can see who posts, how often,
 // and which achievements are actually worth posting.
 api.post('/share/track', async (req, res) => {
-  const { achId, platform } = req.body || {};
+  const { achId, platform, captionEdited, captionChars } = req.body || {};
   if (!achId || !['linkedin', 'whatsapp', 'download', 'copy', 'native'].includes(platform)) {
     return res.status(400).json({ error: 'achId and a valid platform required' });
   }
@@ -565,7 +601,11 @@ api.post('/share/track', async (req, res) => {
   if (!ach) return res.status(404).json({ error: 'Achievement not found' });
   await ShareEvent.create({
     studentId: String(student._id), email: student.email, name: student.name,
-    achId, title: ach.title, platform
+    achId, verifyId: ach.verifyId || '', title: ach.title,
+    kind: ach.kind, board: ach.board, place: ach.place,
+    period: ach.period, periodKey: ach.periodKey || '', earnedAt: ach.earnedAt || null,
+    captionEdited: !!captionEdited, captionChars: Number(captionChars) || 0,
+    platform
   });
   res.json({ ok: true });
 });
@@ -742,14 +782,18 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const last7Days = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const last30Days = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const [allStudents, sessions, attendance, transactions, events, shares, achievementCount] = await Promise.all([
+  const [allStudents, sessions, attendance, transactions, events, shares, achievements, views, reigns] = await Promise.all([
     Student.find().lean(),
     Session.find().sort({ endDateTime: 1 }).lean(),
     AttendanceRecord.find().lean(),
     SPTransaction.find().lean(),
     SessionEvent.find({ timestamp: { $gte: last30Days } }).lean(),
     ShareEvent.find().lean(),
-    Achievement.countDocuments()
+    // The full rows, not a count: per-category share rates need the cards HELD
+    // in each category as their denominator.
+    Achievement.find({}, { achId: 1, kind: 1, board: 1, place: 1, studentId: 1, earnedAt: 1 }).lean(),
+    AchievementView.find({}, { bot: 1, board: 1, kind: 1, ref: 1, viewerDay: 1, found: 1 }).lean(),
+    BoardReign.find().sort({ from: -1 }).lean()
   ]);
   const statusCounts = { active: 0, 'yet to onboard': 0, excused: 0 };
   for (const s of allStudents) { if (s.status in statusCounts) statusCounts[s.status]++; }
@@ -861,40 +905,155 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       pollDebits: pollDebits.length,
       topDrops
     },
-    sharing: shareSummary(shares, achievementCount, last7Days)
+    sharing: shareSummary(shares, achievements, views, last7Days),
+    reigns: reignSummary(reigns)
   });
 });
 
-// Who shares their achievement cards, how often, and which achievements travel.
-// `shareRate` is the honest headline: how many of the cards students hold have
-// ever actually been shared.
-function shareSummary(shares, achievementCount, since) {
+const BOARD_LABEL = {
+  total: 'Overall SP', attendance: 'Attendance', poll: 'Polls',
+  spa: 'Peer Learning', query: 'Queries', '': 'Milestones'
+};
+const median = (xs) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// Who shares their achievement cards, which categories travel, and whether any
+// of it reaches anyone.
+//
+// The headline is `shareRatePct` — of the cards students actually hold, how
+// many were ever posted. A raw share count flatters itself: it rises simply
+// because more cards get minted. The per-category rates work the same way,
+// dividing shares by the cards HELD in that category, which is the only way
+// "Polls gets shared more than Attendance" means anything when the two mint at
+// different volumes.
+function shareSummary(shares, achievements, views, since) {
   const byStudent = new Map();
   const byPlatform = {};
-  const byTitle = new Map();
   const sharedAch = new Set();
+  const latencies = [];
+  let edited = 0;
+
+  // Cards HELD per category — the denominator for every rate below.
+  const cat = new Map();
+  const bucket = (key, label) => {
+    if (!cat.has(key)) cat.set(key, { key, label, held: 0, shares: 0, sharedCards: new Set(), views: 0 });
+    return cat.get(key);
+  };
+  for (const a of achievements) {
+    const key = a.kind === 'rank' ? a.board : 'milestone';
+    bucket(key, key === 'milestone' ? 'Milestones' : (BOARD_LABEL[a.board] || a.board)).held += 1;
+  }
+
+  const byPlace = {
+    1: { shares: 0, held: 0, cards: new Set() },
+    2: { shares: 0, held: 0, cards: new Set() },
+    3: { shares: 0, held: 0, cards: new Set() }
+  };
+  for (const a of achievements) if (a.place >= 1 && a.place <= 3) byPlace[a.place].held += 1;
+
   for (const s of shares) {
     byPlatform[s.platform] = (byPlatform[s.platform] || 0) + 1;
     sharedAch.add(`${s.studentId}:${s.achId}`);
+    if (s.captionEdited) edited += 1;
+    if (s.earnedAt) latencies.push((new Date(s.at) - new Date(s.earnedAt)) / 3600000);
+    if (s.place >= 1 && s.place <= 3) {
+      byPlace[s.place].shares += 1;
+      byPlace[s.place].cards.add(`${s.studentId}:${s.achId}`);
+    }
+
+    const key = s.kind === 'rank' ? s.board : 'milestone';
+    const b = bucket(key, key === 'milestone' ? 'Milestones' : (BOARD_LABEL[s.board] || s.board));
+    b.shares += 1;
+    b.sharedCards.add(`${s.studentId}:${s.achId}`);
+
     let row = byStudent.get(s.studentId);
     if (!row) { row = { name: s.name, email: s.email, shares: 0, achievements: new Set(), last: s.at }; byStudent.set(s.studentId, row); }
     row.shares += 1;
     row.achievements.add(s.achId);
     if (s.at > row.last) row.last = s.at;
-    byTitle.set(s.title || '—', (byTitle.get(s.title || '—') || 0) + 1);
   }
+
+  // Reach. Crawler hits are excluded everywhere: LinkedIn fetches every posted
+  // URL to build its preview, so counting bots would mean counting our own
+  // og:image tags as an audience.
+  const human = views.filter((v) => !v.bot);
+  // A hit on a code that matches nothing is a mistyped or probed URL, not
+  // someone looking at a card. Counted separately so it can't inflate reach.
+  const real = human.filter((v) => v.found);
+  for (const v of real) {
+    const key = v.kind === 'rank' ? v.board : 'milestone';
+    if (v.kind) bucket(key, key === 'milestone' ? 'Milestones' : (BOARD_LABEL[v.board] || v.board)).views += 1;
+  }
+  const byRef = {};
+  for (const v of real) if (v.ref) byRef[v.ref] = (byRef[v.ref] || 0) + 1;
+
+  const categories = [...cat.values()]
+    .map((c) => ({
+      key: c.key, label: c.label, held: c.held, shares: c.shares,
+      sharedCards: c.sharedCards.size,
+      shareRatePct: c.held ? Math.round((c.sharedCards.size / c.held) * 100) : 0,
+      views: c.views
+    }))
+    .sort((a, b) => b.shareRatePct - a.shareRatePct || b.shares - a.shares);
+
+  const latencyHrs = median(latencies);
   return {
     totalShares: shares.length,
     sharers: byStudent.size,
     last7Days: shares.filter((s) => s.at >= since).length,
-    achievementsHeld: achievementCount,
+    achievementsHeld: achievements.length,
     achievementsShared: sharedAch.size,
-    shareRatePct: achievementCount ? Math.round((sharedAch.size / achievementCount) * 100) : 0,
+    shareRatePct: achievements.length ? Math.round((sharedAch.size / achievements.length) * 100) : 0,
+    captionEditedPct: shares.length ? Math.round((edited / shares.length) * 100) : 0,
+    medianHoursToShare: latencyHrs === null ? null : Math.round(latencyHrs * 10) / 10,
     byPlatform,
-    topTitles: [...byTitle.entries()].map(([title, count]) => ({ title, count })).sort((a, b) => b.count - a.count).slice(0, 8),
+    categories,
+    // Rate is distinct cards shared over cards held, exactly as the category
+    // table does it. Dividing by share ACTIONS would let one card shared twice
+    // report 200%, which is a number no reader can interpret.
+    byPlace: [1, 2, 3].map((p) => ({
+      place: p, held: byPlace[p].held, shares: byPlace[p].shares, sharedCards: byPlace[p].cards.size,
+      shareRatePct: byPlace[p].held ? Math.round((byPlace[p].cards.size / byPlace[p].held) * 100) : 0
+    })),
+    reach: {
+      views: real.length,
+      botViews: views.length - human.length,
+      uniqueViewerDays: new Set(real.map((v) => v.viewerDay).filter(Boolean)).size,
+      notFound: human.length - real.length,
+      viewsPerShare: shares.length ? Math.round((real.length / shares.length) * 10) / 10 : 0,
+      byRef: Object.entries(byRef).map(([ref, count]) => ({ ref, count })).sort((a, b) => b.count - a.count).slice(0, 8)
+    },
     topSharers: [...byStudent.values()]
       .map((r) => ({ name: r.name, email: r.email, shares: r.shares, achievements: r.achievements.size, last: r.last }))
       .sort((a, b) => b.shares - a.shares).slice(0, 15)
+  };
+}
+
+// Who has held the top of each board and for how long. Short reigns are kept
+// even though they never earn a card — the churn is the interesting part.
+function reignSummary(reigns) {
+  const DAY = 86400000;
+  const rows = reigns.map((r) => ({
+    board: BOARD_LABEL[r.board] || r.board,
+    name: r.name, studentId: r.studentId,
+    from: r.from, to: r.to,
+    days: Math.max(0, Math.round((((r.to ? new Date(r.to) : new Date()) - new Date(r.from)) / DAY) * 10) / 10),
+    sp: r.peakSp || r.sp,
+    awarded: !!r.awarded,
+    current: !r.to
+  }));
+  const byBoard = {};
+  for (const r of rows) byBoard[r.board] = (byBoard[r.board] || 0) + 1;
+  return {
+    total: rows.length,
+    current: rows.filter((r) => r.current),
+    changesByBoard: Object.entries(byBoard).map(([board, n]) => ({ board, n })).sort((a, b) => b.n - a.n),
+    medianDays: median(rows.filter((r) => !r.current).map((r) => r.days)),
+    history: rows.slice(0, 40)
   };
 }
 
@@ -942,7 +1101,10 @@ async function verifyPageHtml(req, code) {
     img ? `<meta property="og:image:height" content="1350">` : '',
     `<title>${esc(title)}</title>`
   ].filter(Boolean).join('\n  ');
-  return html.replace(/<title>.*?<\/title>/i, '').replace('</head>', `  ${tags}\n</head>`);
+  // `found` drives the status code: a credential page that answers 200 for a
+  // code nobody was ever issued would let a made-up link look live to anything
+  // that only checks the status (crawlers, link unfurlers, a sceptical reader).
+  return { found: !!result, html: html.replace(/<title>.*?<\/title>/i, '').replace('</head>', `  ${tags}\n</head>`) };
 }
 
 if (fs.existsSync(clientDist)) {
@@ -950,7 +1112,12 @@ if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist, { index: false }));
   app.get(['/spurti/verify/:code', '/verify/:code'], async (req, res) => {
     try {
-      res.type('html').send(await verifyPageHtml(req, req.params.code));
+      const { found, html } = await verifyPageHtml(req, req.params.code);
+      // Logged here and NOT on /api/verify: a human loads this page and then
+      // the SPA fetches the API, so counting both would double every real view.
+      // A crawler only ever hits this route, which is what the bot flag is for.
+      logAchievementView(req, req.params.code, found);
+      res.status(found ? 200 : 404).type('html').send(html);
     } catch {
       res.sendFile(path.join(clientDist, 'index.html'));
     }
