@@ -31,7 +31,8 @@ import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import Achievement, { awardAchievements } from '../models/Achievement.js';
 import {
-  rankRows, weeklyPodiumSpecs, sumByStudentCat, weekStartIST, weekKey, weekLabel, CATS
+  rankRows, weeklyPodiumSpecs, sumByStudentCat, weeklyTotal,
+  weekStartIST, weekKey, weekLabel, CATS, WEEKLY_EXCLUDED_CATEGORIES
 } from '../services/leaderboards.js';
 
 const WEEK = 7 * 86400000;
@@ -106,11 +107,12 @@ const held = new Set(
 
 console.log(`backfill ${weekKey(from)} … ${weekKey(to)}   boards: ${BOARDS.join(', ')}`);
 console.log(`${students.length} non-excused students, ${held.size} weekly placings already held`);
+console.log(`weekly Overall SP excludes: ${WEEKLY_EXCLUDED_CATEGORIES.join(', ')}`);
 console.log(APPLY ? '\nMODE: APPLY — cards will be written\n' : '\nMODE: dry run — nothing will be written\n');
 
 const all = [];
 const perStudent = new Map();
-let weeks = 0, emptyWeeks = 0, initialWins = 0;
+let weeks = 0, emptyWeeks = 0;
 
 for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   const we = new Date(ws.getTime() + WEEK);
@@ -123,7 +125,7 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   const specs = [];
   for (const category of BOARDS) {
     const valueOf = category === 'total'
-      ? (sid) => (map.get(sid)?.total) || 0
+      ? (sid) => weeklyTotal(map.get(sid))
       : (sid) => (map.get(sid)?.cat[category]) || 0;
     specs.push(...weeklyPodiumSpecs({
       rows: rankRows(students, valueOf, true),
@@ -137,16 +139,7 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   console.log(`${period}  (${wk})  → ${specs.length} card${specs.length === 1 ? '' : 's'}`);
   for (const s of specs) {
     const [, cat, , , place] = s.doc.achId.split(':');
-    // A weekly board sums EVERY category over the window, `initial` included, so
-    // a student who joined that week can top it on the +100 joining grant alone
-    // without having done anything. Flagged rather than silently filtered: the
-    // same is true of the live build, so changing it is a decision about what a
-    // weekly board means, not something this script should decide on its own.
-    const row = map.get(s.doc.studentId);
-    const initialOnly = cat === 'total' && row && (row.cat.initial || 0) === row.total && row.total > 0;
-    if (initialOnly) initialWins += 1;
-    console.log(`    ${place}. ${cat.padEnd(11)} ${nameOf.get(s.doc.studentId)}  ${s.doc.detail}` +
-                (initialOnly ? '   ⚠ joining grant only' : ''));
+    console.log(`    ${place}. ${cat.padEnd(11)} ${nameOf.get(s.doc.studentId)}  ${s.doc.detail}`);
     perStudent.set(s.doc.studentId, (perStudent.get(s.doc.studentId) || 0) + 1);
     held.add(s.doc.achId);          // so a later week in this same run can't re-add it
   }
@@ -155,12 +148,6 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
 
 console.log(`\n${weeks} week(s) examined, ${emptyWeeks} with no qualifying placing`);
 console.log(`${all.length} card(s) to mint across ${perStudent.size} student(s)`);
-if (initialWins) {
-  console.log(`\n⚠  ${initialWins} of these are Overall-SP placings won on the joining grant alone —`);
-  console.log('   the student earned nothing that week beyond the +100 for starting. A weekly board');
-  console.log('   sums every category including `initial`, and the LIVE build does the same, so this');
-  console.log('   is worth settling before go-live rather than only here.');
-}
 
 const top = [...perStudent.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
 if (top.length) {
