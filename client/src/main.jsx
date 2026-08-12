@@ -287,16 +287,19 @@ function StudentView({ profile, onBack }) {
       <LevelStatus student={student} />
       <StudentPulse profile={profile} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
-        ...(student.eligibleForVibeGoals ? [['journey','My Journey'], ['vibe','Commitments']] : []),
+        ['journey','My Journey'],
+        ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['peer-review','Peer Review'],
         ['spa','SPA Points'],
-        ['leaderboard','Leaderboard']]} />
+        ['leaderboard','Leaderboard'],
+        ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
-      {tab === 'journey' && student.eligibleForVibeGoals && <MyJourney student={student} goToCommitment={goToCommitment} />}
+      {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'peer-review' && <PeerReviewTab email={student.email} student={student} />}
       {tab === 'spa' && <SpaModule student={student} />}
-      {tab === 'leaderboard' && <LeaderboardTabs overall={profile.leaderboard} group={profile.groupLeaderboard} groupLabel={student.leaderboardGroupLabel} />}
+      {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
+      {tab === 'faq' && <FaqTab />}
     </main>
   );
 }
@@ -417,28 +420,66 @@ function LevelStatus({ student }) {
   );
 }
 
-function LeaderboardTabs({ overall = [], group = [], groupLabel }) {
-  const [type, setType] = useState('overall');
-  const rows = type === 'overall' ? overall : group;
+// Curated leaderboard presets → each maps to a cached board (window/category/scope).
+const LB_PRESETS = [
+  { key: 'week-total',        label: 'This Week',                          window: 'week', category: 'total',      scope: 'all' },
+  { key: 'week-total-cohort', label: 'This Week — My Cohort',             window: 'week', category: 'total',      scope: 'cohort' },
+  { key: 'all-total',         label: 'All-Time',                          window: 'all',  category: 'total',      scope: 'all' },
+  { key: 'all-total-cohort',  label: 'All-Time — My Cohort',             window: 'all',  category: 'total',      scope: 'cohort' },
+  { key: 'week-attendance',   label: '🏅 Best Attendance — This Week',    window: 'week', category: 'attendance', scope: 'all' },
+  { key: 'all-attendance',    label: '🏅 Best Attendance — All-Time',     window: 'all',  category: 'attendance', scope: 'all' },
+  { key: 'week-poll',         label: '🎯 Poll Champions — This Week',      window: 'week', category: 'poll',       scope: 'all' },
+  { key: 'all-poll',          label: '🎯 Poll Champions — All-Time',       window: 'all',  category: 'poll',       scope: 'all' },
+  { key: 'week-spa',          label: '🧑‍🏫 Top SPA — This Week',           window: 'week', category: 'spa',        scope: 'all' },
+  { key: 'all-spa',           label: '🧑‍🏫 Top SPA — All-Time',            window: 'all',  category: 'spa',        scope: 'all' },
+  { key: 'week-query',        label: '💬 Top Query Answerers — This Week', window: 'week', category: 'query',      scope: 'all' },
+  { key: 'all-query',         label: '💬 Top Query Answerers — All-Time',  window: 'all',  category: 'query',      scope: 'all' },
+];
+
+function LeaderboardPanel({ student }) {
+  const [presetKey, setPresetKey] = useState('week-total');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const preset = LB_PRESETS.find(p => p.key === presetKey);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    fetch(`${API}/leaderboard/board?window=${preset.window}&category=${preset.category}&scope=${preset.scope}&email=${encodeURIComponent(student.email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) { setData(d); setLoading(false); } })
+      .catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [presetKey, student.email]);
+  const rows = data?.rows || [];
+  const me = data?.me || null;
+  const meOutside = me && !rows.some(r => r.studentId === student._id);
   return (
     <section className="panel">
       <div className="panel-head">
         <h2>Leaderboard</h2>
-        <select value={type} onChange={e => setType(e.target.value)}>
-          <option value="overall">Overall Leaderboard</option>
-          <option value="my_onboarding_group">My Onboarding Group</option>
+        <select value={presetKey} onChange={e => setPresetKey(e.target.value)}>
+          {LB_PRESETS.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
       </div>
-      {type === 'my_onboarding_group' && groupLabel &&
-        <p className="muted">Showing students onboarded in your group: {groupLabel}</p>}
-      <table className="table">
-        <thead><tr><th>Rank</th><th>Name</th><th>Email</th><th>Level</th><th>SP</th></tr></thead>
-        <tbody>{rows.map(row => (
-          <tr key={`${row.rank}-${row.maskedEmail}`} className={row.isCurrentStudent ? 'current-student' : ''}>
-            <td>{row.rank}</td><td>{row.name}</td><td>{row.maskedEmail}</td><td>{row.level}</td><td>{row.totalSp}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+      {preset.window === 'week' && data?.weekLabel && <p className="muted lb-week">Week of {data.weekLabel} · resets Monday</p>}
+      {loading ? <p className="muted">Loading…</p> : rows.length === 0 ? <p className="muted">No entries yet.</p> : (
+        <>
+          <table className="table lb-table">
+            <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
+            <tbody>{rows.map(r => (
+              <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
+                <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {me && (
+            <div className="lb-me">
+              You: <b>#{me.rank}</b> · {me.sp} SP
+              {meOutside && <span className="muted"> — {preset.window === 'week' ? 'earn more this week to climb' : 'keep going to climb'}</span>}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -549,6 +590,52 @@ function Sparkline({ points }) {
         return <i key={`${point.label}-${index}`} title={`${point.label}: ${point.value} SP`} style={{ height: `${Math.max(6, pct)}%` }} />;
       })}
     </div>
+  );
+}
+
+// Student-facing FAQ — reflects the CURRENT SP rules (banded attendance/poll,
+// SPA, query answering, ViBe commitments, positive-only). Keep in sync with the
+// live rubric; edit this array to add/change questions.
+const FAQ_ITEMS = [
+  { q: 'What are Spurti Points (SP)?', a: 'SP are engagement points — a live signal of how consistently you take part in the programme, kept completely separate from your academic marks. Every active intern begins with 100 SP on their official start date, a base "learning energy" that everyone receives equally. From there your balance grows as you join standups, do the session polls, teach and learn from peers, answer queries, and work through ViBe courses. A high SP reflects steady participation and consistency — not how you performed on any exam.' },
+  { q: 'How do I earn SP?', a: 'There are five live sources, and each appears as its own category in your SP Bank: (1) Attendance at the daily standup, (2) the session Polls, (3) SPA — peer teaching and learning endorsements, (4) answering other students’ Queries, and (5) ViBe course Commitments. The system is positive-first: you gain SP for taking part, and most categories can never reduce your balance. The more consistently you engage across these, the higher your SP climbs.' },
+  { q: 'How is attendance SP calculated?', a: 'For each standup we measure the share of the session’s official time-window that you were present, then award it in bands: 90% or more → +10 SP, 75–89% → +5, 50–74% → +3, and below 50% → 0. There is no negative attendance SP — the lowest outcome is simply 0, never a deduction. For example, in a 60-minute window, staying about 54 minutes or more earns the full +10, roughly 45 minutes earns +5, and about 30 minutes earns +3.' },
+  { q: 'How does attendance work on the evening quiz standups (Spandan)?', a: 'The evening standups now run as a live quiz on the Spandan classroom, and there is no separate "join / leave" time recorded there. So your attendance for those sessions is measured from how many of the launched poll questions you answer correctly. Answering about 60% of the questions correctly counts as a full 60-minute session (the top band), and it scales down proportionally from there before the same 10/5/3/0 bands are applied. In short: genuinely showing up and engaging with the quiz is what earns your attendance now — you can’t idle in the background and still get credit.' },
+  { q: 'How is poll SP calculated?', a: 'Poll SP rewards correctness, measured relative to the day’s top scorer: your poll score is taken as a percentage of the highest scorer that day, and that percentage is banded 10/5/3/0. This means simply clicking through answers is not enough — accuracy is what counts, and the bar automatically flexes with how hard the quiz was on a given day, so an unusually tough night doesn’t unfairly punish everyone.' },
+  { q: 'What are SPA points?', a: 'SPA is the peer-teaching activity, and it rewards both learning from peers and teaching them. You earn +5 SP for each question you validly learn, capped at 50 SP (that is, up to 10 questions), and +8 SP for each peer you validly teach, capped at 30 SP. Only endorsements that pass validation count toward your SP — unvalidated or flagged ones do not. Integrity is enforced: if fraud is confirmed or an audit is failed, a penalty is applied to your SP, so it pays to be genuine.' },
+  { q: 'How do I earn SP for answering queries?', a: 'When you answer another student’s question (a peer query) with a real, useful answer, you earn +5 SP for each distinct query you help with, up to a maximum of 200 SP from this source overall. Answering your own question does not count, and answers that admins reject or mark as low-quality / unworthy earn nothing. The goal is genuine peer help — quality and effort, not volume — so posting shallow or copied answers to many queries will not build SP.' },
+  { q: 'What are ViBe commitments?', a: 'ViBe lets you make a commitment on your own learning: you stake some of your current SP on reaching a target completion percentage in a course by a deadline you choose. If you hit that goal in time, you win SP; if you miss it, you lose the amount you staked. It is entirely optional — a motivation tool that puts a bit of "skin in the game" behind a goal you set for yourself, so use it when you want an extra push to finish something.' },
+  { q: 'What is My Journey, and what is the 3,600-minute goal?', a: 'My Journey brings your progress across the four programme tracks — Standups, ViBe, SPA and Projects — together in one view. For standups, the target is 3,600 cumulative attended minutes (roughly 60 sessions of about 60 minutes each). You can set a personal target date for each track to pace yourself, and the standup progress bar shows the minutes you have achieved against the 3,600 required. Once you reach 3,600 minutes the goal is marked as achieved and you no longer need to set a date for it — you’ve completed that track’s attendance goal.' },
+  { q: 'Can my SP go down?', a: 'For everyday activity, no. Attendance and polls only ever add SP — their floor is 0 — so a day with low attendance or a weak poll simply earns less, never a deduction. SP decreases in only two specific situations: if you lose a ViBe stake you chose to make, or if an SPA integrity penalty applies (confirmed fraud or a failed audit). Spurti is deliberately built to reward participation and recovery, not to punish an ordinary off day, so one quiet session will not undo your progress.' },
+  { q: 'What is the SP Bank?', a: 'The SP Bank is your complete, transparent ledger of every SP change. Each line shows the date and time, the category, the reason for the change, the amount, and your running balance immediately afterwards. Reading it session by session tells the full story of how your total was built, rather than just showing a final number. It is also the first place to look whenever a figure seems off — the per-line reasons usually explain exactly what happened.' },
+  { q: 'How should I read my SP ledger?', a: 'Go through it session by session rather than staring only at the final total. For each date, check whether you received attendance SP, poll SP, and any SPA or query SP, note the reason text, and look at the balance after each change. The ledger is designed to be self-explanatory — most questions like "why is my SP this number?" are answered simply by reading the reasons line by line.' },
+  { q: 'What are the leaderboard and levels?', a: 'The leaderboard ranks active students by total SP, and the levels / leagues reflect where you currently stand. Both are engagement signals — they show consistency and participation, not academic ability, so a higher rank means someone has been steadily involved, not necessarily "better" at the subject. Because scores refresh periodically, rankings can move around; the healthiest approach is to focus on your own steady progress rather than day-to-day position changes.' },
+  { q: 'I did something but my SP hasn’t updated — why?', a: 'Scores are recomputed on a schedule (roughly every six hours), not instantly, so new attendance, poll results, endorsements, or answered queries can take some time to appear. Some data also has to be processed first before it can be scored. Give it a little time; if a genuine change still hasn’t shown up after about a day, then it’s worth raising a correction request.' },
+  { q: 'Why is a session missing from my SP?', a: 'The usual reasons are: the session happened before your official internship start date (those never count for you), you were marked excused for that period, the email you joined with doesn’t match your registered account, or that day’s data simply hasn’t been processed yet. Check your SP Bank for that specific date first. If a session you genuinely attended is still missing after processing, raise a correction with the date, session label, and the email you used.' },
+  { q: 'Why did my SP change by a different amount than I expected?', a: 'SP is calculated category by category and then added together, so a single day can combine, say, a full +10 attendance, a poll band, and some SPA or query SP. Because of this, your net for a day may look surprising until you break it down. Open the SP Bank, read each line’s reason for that date, and the per-category detail will almost always account for the total.' },
+  { q: 'How is SP different from marks?', a: 'Marks measure academic performance on assessed tasks; SP measures engagement and consistency in the learning process. You can have strong marks but low SP if you don’t participate steadily, or modest marks but high SP if you attend, attempt the quizzes, teach peers, and stay involved. Both matter, but they answer different questions — Spurti exists to make the engagement side visible early, while it can still be corrected.' },
+  { q: 'I joined with a different email — what should I do?', a: 'Always join sessions and quizzes with your registered programme email; otherwise your attendance and poll records may not link to your account and can appear as missing. If you have already used a different email, ask the team to add it as an alternate email on your record so those sessions attach correctly. Keeping to a single registered email everywhere is the simplest way to avoid mismatches.' },
+  { q: 'How do I request an SP correction?', a: 'Raise a request with enough detail to verify it quickly: your name, your registered email (and any alternate email), the session date and label, the category involved (Attendance / Poll / SPA / Query / ViBe), what you expected versus what you actually see, and any supporting evidence such as a screenshot, your join and leave time, or course-progress proof. The team checks the system records first, so accurate dates and session labels make a correction far easier and faster to resolve.' },
+  { q: 'Why can’t I search my SP directly?', a: 'For privacy and security, direct student search is disabled in production. Instead, open Spurti from your Samagama dashboard — the same login you already use — and it will show only your own record. This is what ensures no one can look up another student’s SP, and it’s why you normally reach Spurti through the official programme link rather than searching by name or email.' },
+];
+
+function FaqTab() {
+  const [open, setOpen] = useState(0);
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>FAQ</h2></div>
+      <p className="muted faq-intro">Tap a question to see the answer.</p>
+      <div className="faq-list">
+        {FAQ_ITEMS.map((item, i) => (
+          <div className={`faq-item ${open === i ? 'open' : ''}`} key={i}>
+            <button className="faq-q" onClick={() => setOpen(open === i ? -1 : i)} aria-expanded={open === i}>
+              <span>{item.q}</span><span className="faq-caret">{open === i ? '–' : '+'}</span>
+            </button>
+            {open === i && <p className="faq-a">{item.a}</p>}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -696,6 +783,12 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   }
   return (
     <div className="jr-goal">
+      {!goal.pending && goal.progressPct != null && (
+        <>
+          <span className="jr-goal-meta">{metric}</span>
+          <div className="jr-progress"><i style={{ width: `${goal.progressPct}%` }} /></div>
+        </>
+      )}
       <span className={`jr-goal-label ${goal.status === 'missed' ? 'miss' : ''}`}>
         🎯 {goal.status === 'missed' ? `Goal missed — set a new date to ${targetText}` : `Set a target date to ${targetText}`}
       </span>
@@ -708,7 +801,7 @@ function PhaseGoal({ phaseKey, field, goal, targetText, form, setForm, onSave })
   );
 }
 
-function MyJourney({ student, goToCommitment }) {
+function MyJourney({ student, goToCommitment, canCommit = false }) {
   const email = student.email;
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -741,7 +834,7 @@ function MyJourney({ student, goToCommitment }) {
     <div className="jr">
       <section className="panel jr-intro">
         <h2>My Journey</h2>
-        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP. &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</p>
+        <p className="muted"><b>🎯 Goal</b> = your own finish-date target; it tracks your pace, no SP.{canCommit && <> &nbsp;<b>🎲 Commitment</b> = stake SP on a bet — the <b>Stake SP</b> link.</>}</p>
         {err && <p className="error">{err}</p>}
       </section>
 
@@ -760,7 +853,7 @@ function MyJourney({ student, goToCommitment }) {
             <span className="jr-pill">Polls +{standups.spPolls}</span>
           </div>
           <PhaseGoal phaseKey="standup" field="standupBy" goal={goals.standup} targetText="reach 3,600 Zoom minutes" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>
+          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('standup')}>🎲 Stake SP →</button></div>}
         </section>
 
         {/* ViBe — goal + commitment */}
@@ -776,7 +869,7 @@ function MyJourney({ student, goToCommitment }) {
           </div>
           {vibe.activeCommitment && <div className="jr-splits"><span className="jr-pill amber">🎲 Active commitment: +{vibe.activeCommitment.goalPct}%</span></div>}
           <PhaseGoal phaseKey="vibe" field="vibeBy" goal={goals.vibe} targetText="finish all your ViBe courses" {...gp} />
-          <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>
+          {canCommit && <div className="jr-cardfoot"><button className="jr-stake" onClick={() => goToCommitment('vibe')}>🎲 Stake SP →</button></div>}
         </section>
 
         {/* SPA — goal (date) works now; progress data + commitment coming soon */}
@@ -815,8 +908,8 @@ function netFor(b) { return b.status === 'won' ? b.potentialWin - b.stake : -(b.
 // engine (stake debited → HIT wins it back multiplied / MISS loses a penalty); only
 // the target metric differs. ViBe is live; the other three land one by one.
 const COMMITMENT_TYPES = [
-  { key: 'vibe',    name: 'ViBe courses',        blurb: 'Pledge to raise your current course’s completion by X% before a deadline.', ready: true },
-  { key: 'standup', name: 'Standups',            blurb: 'Pledge to attend all of this week’s standups at a chosen attendance tier.', ready: true },
+  { key: 'vibe',    name: 'ViBe courses',        blurb: 'ViBe commitments are temporarily on hold — we’re reconnecting the ViBe course-completion feed. They’ll be back up soon.', ready: false },
+  { key: 'standup', name: 'Standups',            blurb: 'Standup commitments are paused — standups have moved to YouTube Live and the attendance module is being reworked. They’ll return once the new attendance tracking is ready.', ready: false },
   { key: 'spa',     name: 'SPA — Matrix Mystics', blurb: 'Pledge to solve N of the 53 problems by a date.',                          ready: false },
   { key: 'project', name: 'Projects',            blurb: 'Pledge to raise / merge N pull requests by a date.',                        ready: false }
 ];
@@ -839,7 +932,7 @@ function Commitments({ student, initialPhase }) {
       </section>
       {active.ready
         ? (active.key === 'vibe' ? <VibeGoals student={student} /> : <StandupGoals student={student} />)
-        : <section className="panel"><p className="cm-soon">{active.blurb}<br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</p></section>}
+        : <section className="panel"><p className="cm-soon">{active.blurb}{!['standup', 'vibe'].includes(active.key) && <><br /><b>Coming soon</b> — same stake-and-win mechanic, tuned to this phase.</>}</p></section>}
     </div>
   );
 }

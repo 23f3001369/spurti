@@ -12,6 +12,7 @@ import AttendanceRecord from './models/AttendanceRecord.js';
 import PollRecord from './models/PollRecord.js';
 import SPTransaction from './models/SPTransaction.js';
 import SessionEvent from './models/SessionEvent.js';
+import LeaderboardSnapshot from './models/LeaderboardSnapshot.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
@@ -310,61 +311,27 @@ api.get('/vibe/state', async (req, res) => {
   res.json(await buildVibeState(student));
 });
 
-api.post('/vibe/bet', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for ViBe Goals.' });
-  const { course, goalPct, stake, multiplier, deadline } = req.body || {};
-  const state = await buildVibeState(student);
-  const v = validateBet({ state, course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, deadline });
-  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
-  const c = courseByKey(course);
-  // debit the stake now (the "cost of the bet"), visible in the SP Bank
-  await applySpDelta(student.email, -(+stake),
-    `Staked ${stake} SP on ViBe goal: +${goalPct}% ${c ? c.name : course} (${multiplier}×)`);
-  await Commitment.create({
-    email: student.email, type: 'vibe', debited: true,
-    course, goalPct: +goalPct, baselinePct: v.baselinePct,
-    deadline: new Date(deadline), stake: +stake, multiplier: +multiplier,
-    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss, status: 'active',
-    label: `+${goalPct}% ${c ? c.name : course} (stake ${stake} @ ${multiplier}×)`
-  });
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.post('/vibe/bet', async (_req, res) => {
+  // ON HOLD: ViBe commitments are paused — the ViBe completion feed (leaderboard API)
+  // is unavailable, so bets can't be verified or settled. No new bets can be placed
+  // (nothing is staked/debited) until the feed is restored.
+  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
 });
 
-api.put('/vibe/bet/:id', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible.' });
-  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
-  if (!bet) return res.status(404).json({ error: 'No active bet to edit.' });
-  const { goalPct, stake, multiplier } = req.body || {};   // deadline & course are NOT editable
-  const state = await buildVibeState(student);
-  const v = validateBet({ state, course: bet.course, goalPct: +goalPct, stake: +stake, multiplier: +multiplier, ignoreActive: true });
-  if (v.errs.length) return res.status(400).json({ error: v.errs.join(' ') });
-  // reconcile the already-debited stake: refund the difference (old − new)
-  const stakeDiff = bet.stake - (+stake);
-  if (stakeDiff !== 0) {
-    const c = courseByKey(bet.course);
-    await applySpDelta(student.email, stakeDiff,
-      `ViBe goal edited — stake ${bet.stake}→${stake} on +${goalPct}% ${c ? c.name : bet.course}`);
-  }
-  Object.assign(bet, { goalPct: +goalPct, stake: +stake, multiplier: +multiplier,
-    potentialWin: v.win, potentialLoss: v.loss, reserved: v.loss });
-  await bet.save();
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.put('/vibe/bet/:id', async (_req, res) => {
+  // ON HOLD: see POST /vibe/bet.
+  return res.status(403).json({ error: 'ViBe commitments are on hold and will be back up soon.' });
 });
 
 // DEMO: resolve a bet (no live settlement cron locally). result = 'won' | 'lost'.
-api.post('/vibe/bet/:id/settle', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const bet = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'vibe', status: 'active' });
-  if (!bet) return res.status(404).json({ error: 'No active bet.' });
-  const result = req.body?.result === 'lost' ? 'lost' : 'won';
-  await settleBetDemo(bet, result);
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildVibeState(fresh));
+api.post('/vibe/bet/:id/settle', async (_req, res) => {
+  // LOCKED DOWN (security): client-controlled self-settlement is removed. This route
+  // trusted req.body.result (defaulting to "won") and granted SP with NO check against
+  // real ViBe course completion — students could place a bet and instantly self-declare
+  // a win to mint SP. There is no real completion feed (VibeProgress.pct was written by
+  // settleBetDemo itself), so settlement cannot be verified yet; disabled until a
+  // server-side/automatic settlement against real completion data is built.
+  return res.status(403).json({ error: 'Bets are settled automatically, not on request. Self-settlement is disabled.' });
 });
 
 // ---- SPA → SP (peer-teaching endorsement points; ALL cohorts) ----------------
@@ -393,37 +360,30 @@ api.get('/standup/state', async (req, res) => {
   res.json(await buildStandupState(student));
 });
 
-api.post('/standup/commit', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for standup commitments.' });
-  const { tierKey, multiplier } = req.body || {};
-  const r = await placeStandup(student, { tierKey, multiplier });
-  if (r.error) return res.status(400).json({ error: r.error });
-  res.json(await buildStandupState(student));
+api.post('/standup/commit', async (_req, res) => {
+  // PAUSED: standups moved to YouTube Live and the attendance module is being
+  // reworked — no new standup commitments until the new attendance tracking lands.
+  return res.status(403).json({ error: 'Standup commitments are paused while attendance is reworked for YouTube Live.' });
 });
 
 // DEMO: resolve a standup commitment (no live weekly settlement cron yet).
-api.post('/standup/commit/:id/settle', async (req, res) => {
-  const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const c = await Commitment.findOne({ _id: req.params.id, email: student.email, type: 'standup', status: 'active' });
-  if (!c) return res.status(404).json({ error: 'No active standup commitment.' });
-  await settleStandupDemo(c, req.body?.result === 'lost' ? 'lost' : 'won');
-  const fresh = await Student.findOne({ email: student.email }).lean();
-  res.json(await buildStandupState(fresh));
+api.post('/standup/commit/:id/settle', async (_req, res) => {
+  // LOCKED DOWN (security): same self-settlement exploit as /vibe/bet/:id/settle —
+  // client-declared "won" minted SP with no verification. Disabled until server-side
+  // settlement against real attendance/completion is built.
+  return res.status(403).json({ error: 'Commitments are settled automatically, not on request. Self-settlement is disabled.' });
 });
 
 // ---- My Journey (phase-by-phase progress + SP; 16 July cohort onward) ---------
 api.get('/journey/state', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
-  if (!isVibeEligible(student)) return res.json({ eligible: false });
-  res.json(await buildJourneyState(student));
+  res.json(await buildJourneyState(student));   // My Journey is universal (Phase 1); Commitments stays gated
 });
 
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student || !isVibeEligible(student)) return res.status(403).json({ error: 'Not eligible for My Journey.' });
+  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
   await saveJourneyPlan(student.email, req.body || {});
   res.json(await buildJourneyState(student));
 });
@@ -478,6 +438,28 @@ api.get('/leaderboard', async (req, res) => {
     level: levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0)),
     trophyLeague: leagueBand(s.totalSp)
   })));
+});
+
+// Cached weekly/all-time/category/cohort boards (built by buildLeaderboards.js).
+// window=week|all, category=total|attendance|poll|spa|query, scope=all|cohort.
+// Returns the top 50 + the requesting student's own rank/SP (even if outside it).
+api.get('/leaderboard/board', async (req, res) => {
+  const student = await vibeStudent(req);
+  const window = ['week', 'all'].includes(req.query.window) ? req.query.window : 'week';
+  const category = ['total', 'attendance', 'poll', 'spa', 'query'].includes(req.query.category) ? req.query.category : 'total';
+  // Cohort scope only exists for the 'total' board; category boards are global.
+  const wantCohort = req.query.scope === 'cohort' && category === 'total' && student?.leaderboardGroup;
+  const boardKey = wantCohort ? `${window}:total:group:${student.leaderboardGroup}` : `${window}:${category}:all`;
+  const board = await LeaderboardSnapshot.findOne({ boardKey }).lean();
+  if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
+  const meId = student ? String(student._id) : null;
+  const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
+  res.json({
+    window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
+    weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
+    rows: board.rows.slice(0, 50),
+    me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
+  });
 });
 
 api.post('/ping', async (req, res) => {
