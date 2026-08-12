@@ -1627,6 +1627,7 @@ function AdminView({ admin, auth, onBack }) {
       {tab === 'live' && <LiveAnalytics active={active} />}
       {tab === 'analytics' && <Analytics data={analytics} />}
       {tab === 'achievements' && <AdminAchievements data={analytics?.sharing} reigns={analytics?.reigns} />}
+      {tab === 'analytics' && <PipelineHealth data={analytics?.pipeline} />}
       {tab === 'students' && <AllStudentsPanel stats={stats} onStudent={loadStudent} auth={auth} />}
       {studentProfile && <div className="overlay"><section className="modal wide"><div className="modal-head"><h2>{studentProfile.student.name}</h2><button className="icon" onClick={() => setStudentProfile(null)}>x</button></div><SpBank transactions={studentProfile.transactions} /></section></div>}
     </main>
@@ -1636,6 +1637,38 @@ function AdminView({ admin, auth, onBack }) {
 // Achievements & sharing. The organising idea is that a raw share count is a
 // vanity number — it goes up simply because more cards get minted — so every
 // figure here that can be a rate is one, with cards HELD as the denominator.
+// Whether the six-hourly SP pipeline is actually working. This exists because
+// sync-attendance-records failed 31 runs in a row over eight days and the only
+// evidence was one line per run in a 4,700-line log file.
+function PipelineHealth({ data }) {
+  if (!data?.available) return null;
+  const when = (t) => t ? new Date(t).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Pipeline health</h2>
+        <span className={data.alerting ? 'error' : 'muted'}>
+          {data.alerting ? `${data.alerting} step(s) failing repeatedly` : 'all steps healthy'}
+        </span>
+      </div>
+      <table className="table">
+        <thead><tr><th>Step</th><th>Status</th><th>Consecutive failures</th><th>Last run</th><th>Last ok</th></tr></thead>
+        <tbody>
+          {data.steps.map(s => (
+            <tr key={s.name} className={s.consecutiveFailures >= 2 ? 'step-alert' : ''}>
+              <td>{s.name}</td>
+              <td>{s.status === 'ok' ? 'ok' : <b className="error">failed</b>}</td>
+              <td>{s.consecutiveFailures > 0 ? <b className="error">{s.consecutiveFailures}</b> : '—'}</td>
+              <td>{when(s.lastRun)}</td>
+              <td>{s.lastOk ? when(s.lastOk) : <b className="error">never</b>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
 function AdminAchievements({ data, reigns }) {
   if (!data) return <section className="panel empty">Loading achievement data…</section>;
   const d = (x) => x ? new Date(x).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';

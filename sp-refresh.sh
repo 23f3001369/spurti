@@ -36,6 +36,54 @@ fi
 
 log() { echo "[$(date -u +%FT%TZ)] $*" >> "$LOG"; }
 
+# ── Step runner with failure tracking ────────────────────────────────────────
+# sync-attendance-records failed 31 runs in a row over eight days without anyone
+# noticing: it is non-fatal by design (a display collection must not block SP
+# scoring), and a single "FAILED (non-fatal)" line in a 4,700-line log is
+# invisible. Each step's outcome is now recorded, consecutive failures counted,
+# and a step that fails twice running shouts in the log AND shows up on the
+# admin dashboard, which is somewhere a human actually looks.
+HEALTH="$REPO/logs/step-health.tsv"      # name \t status \t lastRun \t consecFails \t lastOk
+ALERT_AFTER=2
+touch "$HEALTH"
+
+_health_set() {
+  local name="$1" status="$2" fails="$3" lastok="$4" tmp
+  tmp=$(mktemp)
+  awk -F'\t' -v n="$name" '$1!=n' "$HEALTH" > "$tmp" 2>/dev/null </dev/null || true
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$(date -u +%FT%TZ)" "$fails" "$lastok" >> "$tmp"
+  mv "$tmp" "$HEALTH"
+}
+
+# run_step <name> <fatal|nonfatal> <note-on-failure> <command...>
+run_step() {
+  local name="$1" mode="$2" note="$3"; shift 3
+  local prev fails lastok
+  prev=$(awk -F'\t' -v n="$name" '$1==n{print $4"|"$5}' "$HEALTH" 2>/dev/null </dev/null)
+  fails=${prev%%|*}; lastok=${prev#*|}
+  [ -n "$fails" ] || fails=0
+  [ "$fails" = "$prev" ] && lastok=""
+
+  if "$@" >> "$LOG" 2>&1; then
+    log "$name ok"
+    _health_set "$name" ok 0 "$(date -u +%FT%TZ)"
+    return 0
+  fi
+
+  fails=$((fails + 1))
+  _health_set "$name" failed "$fails" "$lastok"
+  if [ "$fails" -ge "$ALERT_AFTER" ]; then
+    log "!!! ALERT: $name has FAILED $fails runs in a row (last ok: ${lastok:-never}) — $note"
+  else
+    log "$name FAILED — $note"
+  fi
+  if [ "$mode" = fatal ]; then
+    log "$name is fatal — aborting this run"
+    exit 1
+  fi
+  return 1
+}
+
 log "=== sp-refresh start ==="
 
 # Load guard: the APPLY rewrites ~90k sptransactions; doing that under heavy load
@@ -59,48 +107,31 @@ fi
 
 # Step 0: pull the latest Spandan evening-poll sessions (incremental). Non-fatal:
 # if the API is down we still re-score with whatever is already mirrored.
-if "$NODE" pipeline/spandan-poll-fetch.cjs >> "$LOG" 2>&1; then
-  log "spandan fetch ok"
-else
-  log "spandan fetch FAILED (non-fatal) — scoring with existing spandan_polls"
-fi
+run_step "spandan fetch" nonfatal "scoring with existing spandan_polls" \
+  "$NODE" pipeline/spandan-poll-fetch.cjs || true
 
 # Step 1: re-score (APPLY). Backs up before writing.
-if APPLY=1 OUT_DIR="$OUT_DIR" "$NODE" --max-old-space-size=2048 \
-     pipeline/sp-rubric-build-mirror.cjs >> "$LOG" 2>&1; then
-  log "rubric APPLY ok"
-else
-  log "rubric APPLY FAILED — skipping sync-levels (SP ledger untouched on failure)"
-  exit 1
-fi
+run_step "rubric APPLY" fatal "SP ledger untouched on failure" \
+  env APPLY=1 OUT_DIR="$OUT_DIR" "$NODE" --max-old-space-size=2048 pipeline/sp-rubric-build-mirror.cjs
 
 # Step 2: refresh derived Levels / Trophy League / Legend fields.
-if "$NODE" sync-levels.cjs >> "$LOG" 2>&1; then
-  log "sync-levels ok"
-else
-  log "sync-levels FAILED — SP applied but derived level fields may be stale"
-  exit 1
-fi
+run_step "sync-levels" fatal "SP applied but derived level fields may be stale" \
+  "$NODE" sync-levels.cjs
 
 # Step 2b: fold attendance minutes into attendancerecords (drives the My-Journey
 # 3600-minute standup goal). Parses "present X of Y min (Z%)" from the attendance
 # transactions the rubric just wrote. Non-fatal — SP is unaffected if this fails.
-if "$NODE" pipeline/sync-attendance-records.cjs >> "$LOG" 2>&1; then
-  log "sync-attendance-records ok"
-else
-  log "sync-attendance-records FAILED (non-fatal) — attendance minutes/3600 goal may be stale"
-fi
+run_step "sync-attendance-records" nonfatal "attendance minutes/3600 goal may be stale" \
+  "$NODE" pipeline/sync-attendance-records.cjs || true
 
 # Step 3: rebuild the SP-trajectory snapshot (cohort/group reference lines for the
 # student trajectory modal). Non-fatal — the student's own line is always live.
-if "$NODE" server/scripts/buildTrajectories.js >> "$LOG" 2>&1; then
-  log "trajectory snapshot ok"
-else
-  log "trajectory snapshot FAILED (non-fatal) — cohort lines may be stale"
-fi
+run_step "trajectory snapshot" nonfatal "cohort lines may be stale" \
+  "$NODE" server/scripts/buildTrajectories.js || true
 
 # Step 3b: rebuild cached leaderboard boards (weekly/all-time/category/cohort).
-if "$NODE" server/scripts/buildLeaderboards.js >> "$LOG" 2>&1; then log "leaderboards ok"; else log "leaderboards FAILED (non-fatal)"; fi
+run_step "leaderboards" nonfatal "boards may be stale" \
+  "$NODE" server/scripts/buildLeaderboards.js || true
 
 # Housekeeping: weekly retention — keep last 2 days of dailies + 1 snapshot/week for 12 weeks.
 OUT_DIR="$OUT_DIR" WEEKS=12 DAILY_DAYS=2 "$REPO/sp-runs-retention.sh" >> "$LOG" 2>&1 || true

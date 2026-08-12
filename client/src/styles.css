@@ -753,6 +753,9 @@ input {
 .post-howto li { font-size: 12.5px; line-height: 1.5; color: #475569; }
 .post-howto .tag-links { display: flex; gap: 14px; margin-top: 5px; }
 
+tr.step-alert { background: #fff1f0; }
+tr.step-alert td { border-color: #f3c9c5; }
+
 /* Admin: achievements & sharing */
 .ach-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 4px; }
 .ach-stats > div { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; background: #fafdff; }
