@@ -57,7 +57,12 @@ export async function computeAndStoreLeaderboards() {
   const levelOf = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
   const build = (subset, valueOf) => subset
     .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOf(s), sp: Math.round(valueOf(String(s._id))) }))
-    .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name))
+    // Tie-break on name uses the SAME binary (code-point) ordering the live
+    // leaderboard query applies (`name: 1` / `name: { $lt: ... }` in server.js),
+    // NOT localeCompare — otherwise a snapshot rank can disagree with the
+    // student-facing "Rank X of Y". (`a.name < b.name` in JS matches Mongo's
+    // string ordering for the practical character set.)
+    .sort((a, b) => b.sp - a.sp || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map((r, i) => ({ ...r, rank: i + 1 }));
 
   const wTotal = (sid) => (weekMap.get(sid)?.total) || 0;

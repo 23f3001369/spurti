@@ -560,7 +560,7 @@ function StudentPulse({ profile }) {
         <div className="pulse-card progress-card">
           <span>Standing</span>
           <strong>Rank {student.rank}</strong>
-          <p>{cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
+          <p>{cohort.pointsToTop50 == null || cohort.pointsToTop50 === 0 ? 'You are in the Top 50.' : `${cohort.pointsToTop50} SP to enter Top 50.`}</p>
           <div className="compare-list">
             <b>Cohort avg: {cohort.averageSp}</b>
             <b>Top 50: {cohort.top50Cutoff ?? '—'}</b>
