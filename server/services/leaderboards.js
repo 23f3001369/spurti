@@ -48,6 +48,16 @@ function weekLabel(weekStartUtc) {
 // A placing shared by more than this many people isn't a placing.
 const TIE_MAX = 3;
 
+// Boards that mint no cards, weekly or reign, while their scoring is unsettled.
+//
+// `spa` is out for now: the scheme caps at 50 questions x5 + 30 peers x8 = 490
+// SP and 110 students already sit on exactly that, so "top of Peer Learning" is
+// a permanent mass tie and the weekly placings are decided by who reached the
+// ceiling first rather than by who did most. TIE_MAX already stops it minting a
+// reign; this stops the weekly cards too, until the scoring is reworked.
+// Removing 'spa' from this list is all it takes to turn them back on.
+export const AWARD_EXCLUDED_BOARDS = ['spa'];
+
 // The weekly TOTAL board measures what a student did during that week, so the
 // +100 `initial` joining grant is excluded: it is awarded for starting, not for
 // anything done, and a student who joined mid-week would otherwise top the board
@@ -231,7 +241,9 @@ export async function computeAndStoreLeaderboards() {
     const settled = new Set(already.map((a) => a.achId));
 
     const period = `Week of ${prevLabel}`;
-    for (const [category, valueOf] of [['total', pTotal], ...CATS.map((c) => [c, pCat(c)])]) {
+    const awardable = [['total', pTotal], ...CATS.map((c) => [c, pCat(c)])]
+      .filter(([category]) => !AWARD_EXCLUDED_BOARDS.includes(category));
+    for (const [category, valueOf] of awardable) {
       ops.push(...weeklyPodiumSpecs({
         rows: rankRows(students, valueOf, true),
         category, weekKey: wk, period, earnedAt: now, settled
@@ -277,7 +289,9 @@ async function trackReigns(boards, now) {
   const ops = [];
   const closedAwarded = [];
 
-  for (const b of boards.filter((x) => x.window === 'all' && x.scope === 'all')) {
+  const reignable = boards.filter((x) => x.window === 'all' && x.scope === 'all'
+    && !AWARD_EXCLUDED_BOARDS.includes(x.category));
+  for (const b of reignable) {
     const tiedTop = b.rows.filter((r) => r.rank === 1 && r.sp > 0);
     // The same TIE_MAX rule the podium uses: a top shared by more than three
     // people is not a placing, and it is certainly not a reign. This is not
