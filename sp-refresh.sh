@@ -47,12 +47,35 @@ HEALTH="$REPO/logs/step-health.tsv"      # name \t status \t lastRun \t consecFa
 ALERT_AFTER=2
 touch "$HEALTH"
 
-_health_set() {
-  local name="$1" status="$2" fails="$3" lastok="$4" tmp
-  tmp=$(mktemp)
-  awk -F'\t' -v n="$name" '$1!=n' "$HEALTH" > "$tmp" 2>/dev/null </dev/null || true
-  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$(date -u +%FT%TZ)" "$fails" "$lastok" >> "$tmp"
-  mv "$tmp" "$HEALTH"
+# Where an alert actually goes. The box has no MTA, no local SMTP and no mail
+# credentials, so nothing can be posted from here directly. ALERT_WEBHOOK_URL
+# (in .env) is POSTed a small JSON body instead; a Google Apps Script web app is
+# the intended target, since this project already uses one for the survey sheet
+# sync and an Apps Script sends mail AS the owner — no password ever lands on
+# the server. Slack/Discord webhooks work too. Unset = log only, no error.
+# Read ONLY the alert keys out of .env. Deliberately not `set -a; . .env` —
+# that would export every secret in the file into every child process for the
+# rest of the run, to configure one webhook.
+_envget() { grep -E "^$1=" "$REPO/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'\r"; }
+ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(_envget ALERT_WEBHOOK_URL)}"
+ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET:-$(_envget ALERT_WEBHOOK_SECRET)}"
+
+notify() {
+  [ -n "$ALERT_WEBHOOK_URL" ] || return 0
+  local payload
+  # JSON built by node, not by sed — shell quoting is not a serialiser. The
+  # secret goes via the environment so it stays out of the process list.
+  payload=$(ALERT_TEXT="$1" ALERT_HOST="$(hostname)" ALERT_SECRET="$ALERT_WEBHOOK_SECRET" \
+    "$NODE" -e 'process.stdout.write(JSON.stringify({
+      secret: process.env.ALERT_SECRET || "",
+      host: process.env.ALERT_HOST || "",
+      text: process.env.ALERT_TEXT || ""
+    }))' 2>/dev/null) || return 0
+  # Best effort and short-fused: the alerting channel must never be the reason a
+  # scoring run hangs or fails.
+  curl -fsS -m 15 -X POST "$ALERT_WEBHOOK_URL" \
+       -H 'Content-Type: application/json' --data "$payload" >/dev/null 2>&1 \
+    || log "(alert webhook POST failed — the alert is still in this log)"
 }
 
 # run_step <name> <fatal|nonfatal> <note-on-failure> <command...>
@@ -73,7 +96,9 @@ run_step() {
   fails=$((fails + 1))
   _health_set "$name" failed "$fails" "$lastok"
   if [ "$fails" -ge "$ALERT_AFTER" ]; then
-    log "!!! ALERT: $name has FAILED $fails runs in a row (last ok: ${lastok:-never}) — $note"
+    local msg="ALERT: sp-refresh step '$name' has FAILED $fails runs in a row (last ok: ${lastok:-never}). $note"
+    log "!!! $msg"
+    notify "$msg"
   else
     log "$name FAILED — $note"
   fi

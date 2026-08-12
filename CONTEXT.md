@@ -233,6 +233,8 @@ OFF, so the feature ships dark):
 | `ACHIEVEMENTS_ENABLED=1` | tab visible to the whole cohort. **Also** turns on tie-aware "1224" ranking in the leaderboard build and the minting of podium cards — with it off, the build ranks 1,2,3… exactly as before and awards nothing. |
 | `ACHIEVEMENTS_EMAILS=a@b.com,…` | named accounts see the tab while it is otherwise off (preview on live data) |
 | `ACHIEVEMENTS_SHARING=1` | Share/Download buttons, and the `share/card` + `share/track` endpoints. Requires the tab to be visible; never the other way round |
+| `ALERT_WEBHOOK_URL=…` | where sp-refresh POSTs an alert when a step fails twice running (see below). Unset = the alert only reaches `logs/sp-refresh.log` and the admin dashboard |
+| `ALERT_WEBHOOK_SECRET=…` | shared secret sent in the alert body, same pattern as the survey Apps Script endpoints |
 | `VERIFY_VIEW_LOG=0` | turns OFF verify-page view logging (defaults ON). The one switch here that defaults on, because the log is what makes reach measurable at all |
 
 **When podium cards are awarded.** Weekly cards come from the **last completed
@@ -362,3 +364,45 @@ mandatory sessions 15 May → 27 Jun (36 qualifying sessions; 26 Jun was a holid
   sptransactions ~47,955. Superseded by the 28 Jun mirror-rubric run above.
 - 27 May Morning ingestion: attendance ✅ poll ✅ chat ✅ (429 students got +5 SP from chat)
 - 37 peer-escalation SP penalty reviews (camera off) created in `chat_s_p_reviews` — pending admin approval
+
+## Pipeline alerting
+
+`sync-attendance-records` failed **31 runs in a row over eight days** and nobody
+noticed: it is non-fatal by design, and the only trace was one line per run in a
+4,700-line log. Non-fatal must not mean invisible.
+
+Every step in `sp-refresh.sh` now runs through `run_step`, which writes
+`logs/step-health.tsv` (`name / status / lastRun / consecutiveFailures / lastOk`),
+and after **two consecutive failures** logs `!!! ALERT: …` and POSTs
+`ALERT_WEBHOOK_URL`. Success resets the counter. Fatal vs non-fatal is unchanged
+— `rubric APPLY` and `sync-levels` still abort the run.
+
+The same file is served at `/api/admin/analytics` → `pipeline` and rendered as a
+**Pipeline health** table on the admin Analytics tab, red once a step is alerting.
+
+**The box cannot send email itself** — no MTA, no local SMTP, no mail library, no
+credentials, and cron has no `MAILTO`. So alerts leave via a webhook. The intended
+target is a **Google Apps Script web app**, which this project already uses for
+the survey sheet sync: it runs as the owner, so `MailApp.sendEmail()` sends from
+their own account and **no mail password is ever stored on the server**. Slack or
+Discord webhooks work equally well — the body is
+`{ secret, host, text }`.
+
+```javascript
+// Apps Script: Deploy > New deployment > Web app, execute as me, anyone can access.
+function doPost(e) {
+  var p = JSON.parse(e.postData.contents);
+  if (p.secret !== 'PUT_THE_SAME_SECRET_AS_ALERT_WEBHOOK_SECRET_HERE') {
+    return ContentService.createTextOutput('no');
+  }
+  MailApp.sendEmail({
+    to: 'imsakshivk@gmail.com',
+    subject: '[Spurti] pipeline alert on ' + p.host,
+    body: p.text
+  });
+  return ContentService.createTextOutput('ok');
+}
+```
+
+The POST is best-effort with a 15s timeout: an alerting channel must never be the
+reason a scoring run hangs or fails.
