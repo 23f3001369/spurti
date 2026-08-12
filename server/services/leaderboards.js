@@ -1,14 +1,21 @@
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import LeaderboardSnapshot from '../models/LeaderboardSnapshot.js';
-import Achievement from '../models/Achievement.js';
+import Achievement, { newVerifyId } from '../models/Achievement.js';
 import { levelFor } from './levels.js';
 
 const CAT_LABEL = { total: 'Overall', attendance: 'Best Attendance', poll: 'Poll Champions', spa: 'Top SPA', query: 'Top Query Answerers' };
-function boardTitle(b) {
-  const win = b.window === 'week' ? `This Week (${b.weekLabel})` : 'All-Time';
-  return `${CAT_LABEL[b.category]} · ${win}${b.scope === 'group' ? ' — Cohort' : ''}`;
-}
+
+// Achievement titles, one per board. The SAME title is used for all three podium
+// places — the medal in the card's gold disc is what says which place it was.
+const ACH_TITLE = {
+  total: 'Cohort Champion',
+  attendance: 'Attendance Ace',
+  poll: 'Poll Champion',
+  spa: 'Peer-Learning Champion',
+  query: "Cohort's Go-To"
+};
+const PLACE_ICON = { 1: '🥇', 2: '🥈', 3: '🥉' };
 
 // Category boards beyond the "total" board. Combined SPA (learn + teach) is one
 // category. `total` = sum of all categories in the window.
@@ -50,6 +57,13 @@ async function sumByStudentCat(match) {
 
 export async function computeAndStoreLeaderboards() {
   const now = new Date();
+  // Both changes this feature makes to the build — tie-aware ranks and minted
+  // podium cards — become visible to the cohort the moment the sp-refresh cron
+  // runs, so they wait on the same go-live switch as the tab (ACHIEVEMENTS_ENABLED).
+  // With it off the build behaves exactly as it did before achievements existed:
+  // unique 1,2,3… ranks and no cards. Read here, not at import, so the flag is
+  // whatever the .env said when the process started, however it was started.
+  const awardsOn = process.env.ACHIEVEMENTS_ENABLED === '1';
   const weekStart = weekStartIST(now);
   const label = weekLabel(weekStart);
 
@@ -68,6 +82,7 @@ export async function computeAndStoreLeaderboards() {
     const sorted = subset
       .map((s) => ({ studentId: String(s._id), name: s.name || '', level: levelOf(s), sp: Math.round(valueOf(String(s._id))) }))
       .sort((a, b) => b.sp - a.sp || a.name.localeCompare(b.name));
+    if (!awardsOn) return sorted.map((r, i) => ({ ...r, rank: i + 1 }));
     let rank = 0, prevSp = null;
     return sorted.map((r, i) => {
       if (r.sp !== prevSp) { rank = i + 1; prevSp = r.sp; }
@@ -108,24 +123,40 @@ export async function computeAndStoreLeaderboards() {
   await Promise.all(boards.map((b) => LeaderboardSnapshot.updateOne({ boardKey: b.boardKey }, { $set: b }, { upsert: true })));
   await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
 
-  // Award permanent rank achievements (idempotent; earnedAt keeps the first date).
-  // #1 on any board — but only when the top is genuinely exclusive (tie group ≤ 3),
-  // so a mass tie (e.g. everyone at the attendance cap) doesn't dilute "#1".
-  // Plus Top 10 on the all-time overall board.
-  const TIE_MAX = 3;
+  // Award permanent podium achievements — 1st, 2nd and 3rd on each GLOBAL board,
+  // weekly and all-time. Idempotent: `earnedAt` and `verifyId` are set on insert
+  // only, so re-running the build six-hourly never mints a second card for the
+  // same board+period. A weekly win carries its week in the achId, so winning
+  // the same board in a later week IS a new, separately shareable achievement.
+  //
+  // Not awarded here (deliberate, v1 scope):
+  //  · onboarding-group boards — they overlap the cohort-wide win and would more
+  //    than double the weekly card volume for the least meaningful placing.
+  //  · placings below 3rd — "7th on the Polls board this week" can be 7th out of
+  //    a field of thirty, which isn't the same achievement as a podium.
+  const TIE_MAX = 3;      // a place shared by more than 3 people isn't a placing
   const ops = [];
-  const add = (studentId, achId, icon, title, subtitle) => ops.push({ updateOne: {
-    filter: { studentId, achId },
-    update: { $setOnInsert: { studentId, achId, icon, title, subtitle, earnedAt: now } },
-    upsert: true } });
+  const add = (r, b, place) => {
+    const wk = b.window === 'week' ? weekStart.toISOString().slice(0, 10) : 'all';
+    const achId = `rank:${b.category}:${b.window}:${wk}:${place}`;
+    ops.push({ updateOne: {
+      filter: { studentId: r.studentId, achId },
+      update: { $setOnInsert: {
+        studentId: r.studentId, achId, kind: 'rank', board: b.category, place,
+        icon: PLACE_ICON[place], title: ACH_TITLE[b.category],
+        period: b.window === 'week' ? `Week of ${label}` : 'All-time',
+        detail: `${r.sp} SP`, verifyId: newVerifyId(), earnedAt: now
+      } },
+      upsert: true } });
+  };
   for (const b of boards) {
-    const wk = b.window === 'week' ? ':' + weekStart.toISOString().slice(0, 10) : '';
-    const firsts = b.rows.filter((r) => r.rank === 1);
-    if (firsts.length && firsts.length <= TIE_MAX) {
-      for (const r of firsts) add(r.studentId, `fp:${b.boardKey}${wk}`, '🥇', `#1 — ${boardTitle(b)}`, `${r.sp} SP`);
-    }
-    if (b.boardKey === 'all:total:all') {
-      for (const r of b.rows) { if (r.rank > 10) break; if (r.rank !== 1) add(r.studentId, 'top10:all:total', '🏅', 'Top 10 — Overall', 'All-time overall leaderboard'); }
+    if (!awardsOn) break;
+    if (b.scope !== 'all') continue;                 // global boards only in v1
+    for (const place of [1, 2, 3]) {
+      const tied = b.rows.filter((r) => r.rank === place);
+      // A placing needs a real score: the top of a table of zeroes is not a win.
+      if (!tied.length || tied.length > TIE_MAX || tied[0].sp <= 0) continue;
+      for (const r of tied) add(r, b, place);
     }
   }
   if (ops.length) await Achievement.bulkWrite(ops, { ordered: false });

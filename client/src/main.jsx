@@ -5,7 +5,16 @@ import './styles.css';
 const APP_BASE = window.location.pathname.startsWith('/spurti') ? '/spurti' : '';
 const API = `${APP_BASE}/api`;
 
+// /spurti/verify/SPRT-XXXX-XXXX is a public page — the QR on a shared card
+// resolves here, and it must render for someone who has never logged in.
+const VERIFY_CODE = (window.location.pathname.match(/\/verify\/([A-Za-z0-9-]+)\/?$/) || [])[1] || null;
+
 function App() {
+  if (VERIFY_CODE) return <VerifyView code={VERIFY_CODE.toUpperCase()} />;
+  return <AppShell />;
+}
+
+function AppShell() {
   const [view, setView] = useState(() => new URLSearchParams(window.location.search).get('admin') === '1' ? 'admin-login' : 'landing');
   const [profile, setProfile] = useState(null);
   const [excused, setExcused] = useState(null);
@@ -274,6 +283,9 @@ function StudentView({ profile, onBack }) {
   const [commitPhase, setCommitPhase] = useState('vibe');
   const { student } = profile;
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
+  // Fetched up here rather than inside the panel because the server decides who
+  // gets the tab at all — until it answers `visible`, the tab strip omits it.
+  const ach = useAchievements(student.email);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -290,12 +302,14 @@ function StudentView({ profile, onBack }) {
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
+        ...(ach?.visible ? [['achievements','Achievements']] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
       {tab === 'journey' && <MyJourney student={student} goToCommitment={goToCommitment} canCommit={student.eligibleForVibeGoals} />}
       {tab === 'vibe' && student.eligibleForVibeGoals && <Commitments student={student} initialPhase={commitPhase} />}
       {tab === 'spa' && <SpaModule student={student} />}
+      {tab === 'achievements' && ach?.visible && <AchievementsPanel student={student} data={ach} />}
       {tab === 'leaderboard' && <LeaderboardPanel student={student} />}
       {tab === 'faq' && <FaqTab />}
     </main>
@@ -415,6 +429,298 @@ function LevelStatus({ student }) {
         {student.legendBadgeUnlocked ? ' You have unlocked the Legend Badge by reaching 1500 Spurti Points at least once.' : ''}
       </p>
     </section>
+  );
+}
+
+// ---- Achievements -----------------------------------------------------------
+// One tile per board (plus milestones); opening a tile reveals every instance,
+// since a weekly win carries its week and is separately shareable. Locked
+// milestones show what's left to go so the tab is a goal list, not just a shelf.
+// `visible` and `canShare` come from the server's env switches — the client never
+// decides either, so pulling the feature back is a .env edit and a restart.
+function useAchievements(email) {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/achievements?email=${encodeURIComponent(email)}`)
+      .then(r => r.json())
+      .then(d => { if (live) setData(d); })
+      .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
+    return () => { live = false; };
+  }, [email]);
+  return data;
+}
+
+function AchievementsPanel({ student, data }) {
+  const [openKey, setOpenKey] = useState(null);
+  const [sharing, setSharing] = useState(null);
+
+  if (!data) return <section className="panel">Loading your achievements…</section>;
+
+  const me = { name: student.name, totalSp: student.totalSp, level: student.level, ...(data.student || {}), email: student.email };
+  const canShare = !!data.sharing;
+  const groups = data.groups || [];
+  const locked = data.locked || [];
+
+  return (
+    <div className="ach">
+      <section className="panel ach-head">
+        <div className="ach-counts">
+          <div><strong>{data.counts?.earned || 0}</strong><span>earned</span></div>
+          <div><strong>{data.counts?.thisWeek || 0}</strong><span>this week</span></div>
+          <div><strong>{data.counts?.boards || 0}</strong><span>boards placed on</span></div>
+        </div>
+        <p className="muted">
+          Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
+          Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
+        </p>
+      </section>
+
+      {groups.length === 0 && locked.length === 0 && (
+        <section className="panel empty"><p className="muted">No achievements yet. Place on any leaderboard, or hit a milestone, and your first card lands here.</p></section>
+      )}
+
+      <div className="ach-grid">
+        {groups.map(g => (
+          <AchievementTile
+            key={g.key} group={g} me={me} canShare={canShare}
+            open={openKey === g.key}
+            onToggle={() => setOpenKey(openKey === g.key ? null : g.key)}
+            onShare={setSharing}
+          />
+        ))}
+        {locked.map(l => (
+          <div className="ach-tile locked" key={l.key}>
+            <div className="ach-medal">{l.icon}</div>
+            <div className="ach-body">
+              <h4>{l.title}</h4>
+              <span className="ach-when">Locked · {l.remaining}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {sharing && <ShareModal item={sharing} me={me} onClose={() => setSharing(null)} />}
+    </div>
+  );
+}
+
+const PLACE_WORD = { 1: '1st', 2: '2nd', 3: '3rd' };
+
+function AchievementTile({ group, me, open, onToggle, onShare, canShare }) {
+  const latest = group.items[0];
+  const isRank = group.kind === 'rank';
+  return (
+    <div className={`ach-tile${open ? ' open' : ''}`}>
+      <button className="ach-face" onClick={onToggle} aria-expanded={open}>
+        <div className="ach-medal">{group.icon}</div>
+        <div className="ach-body">
+          <h4>{group.title}</h4>
+          <span className="ach-when">
+            {isRank
+              ? `Best: ${PLACE_WORD[group.bestPlace] || '—'} · ${group.items.length} time${group.items.length === 1 ? '' : 's'}`
+              : latest.period}
+          </span>
+        </div>
+        <span className="ach-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <ul className="ach-items">
+          {group.items.map(item => (
+            <li key={item.achId}>
+              <span className="ach-item-medal">{item.icon}</span>
+              <span className="ach-item-text">
+                <b>{item.period}</b>
+                {item.detail ? <em>{item.detail}</em> : null}
+              </span>
+              {canShare && <button className="ach-share" onClick={() => onShare(item)}>Share</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Renders the actual PNG the student posts, and hands them the three ways out:
+// LinkedIn, WhatsApp, or just the file. Each one is logged.
+// navigator.clipboard is secure-context only (https or localhost), so on any
+// plain-http origin it is simply absent and a copy would fail silently. The
+// textarea trick still works everywhere.
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* fall through */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+
+function ShareModal({ item, me, onClose }) {
+  const [png, setPng] = useState(null);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const verifyUrl = `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`;
+  const [caption, setCaption] = useState('');
+
+  useEffect(() => {
+    import('./shareCard.js').then(m => setCaption(m.shareCaption(item, false, verifyUrl)));
+  }, [item.achId]);
+
+  useEffect(() => {
+    let live = true;
+    import('./shareCard.js')
+      .then(m => m.renderCard(item, me, verifyUrl))
+      .then(url => {
+        if (!live) return;
+        setPng(url);
+        // Hand the card to the server once, so the verify link carries it as a
+        // preview image. Best-effort: a failure here only costs the preview.
+        fetch(`${API}/share/card`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: me.email, achId: item.achId, dataUrl: url })
+        }).catch(() => {});
+      })
+      .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
+    return () => { live = false; };
+  }, [item.achId]);
+
+  const track = (platform) => fetch(`${API}/share/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: me.email, achId: item.achId, platform })
+  }).catch(() => {});
+
+  // Two ways to get the picture into the post without the student handling a file:
+  //  1. the share sheet, which takes the image itself — phones, and the better path
+  //  2. failing that, post the verify link and let the platform expand it into a
+  //     preview of the card (that's what the og:image on /verify/:code is for)
+  // Downloading is a fallback, not the route.
+  const share = async (platform) => {
+    const { shareCaption, dataUrlToFile } = await import('./shareCard.js');
+    const caption = shareCaption(item, platform === 'whatsapp', verifyUrl);
+    const file = png ? dataUrlToFile(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`) : null;
+
+    // Only phones get the share sheet. Desktop Chrome/Safari also advertise
+    // navigator.share, but there it opens the OS app picker (Mail, AirDrop…),
+    // which is not what someone pressing "Share on LinkedIn" is asking for.
+    const onPhone = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (onPhone && file && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], text: caption, title: item.title });
+        track('native');
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;   // they backed out; not a failure
+      }
+    }
+
+    track(platform);
+    if (platform === 'linkedin') {
+      // LinkedIn cannot be handed post text by URL — it opens an empty composer
+      // whatever you pass. Copying first is what makes the paste possible.
+      const ok = await copyText(caption);
+      setCopied(ok);
+      window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(verifyUrl)}`, '_blank', 'noopener');
+    } else if (platform === 'whatsapp') {
+      window.open(`https://wa.me/?text=${encodeURIComponent(caption)}`, '_blank', 'noopener');
+    }
+  };
+
+  const justDownload = async () => {
+    const { downloadDataUrl } = await import('./shareCard.js');
+    track('download');
+    if (png) downloadDataUrl(png, `spurti-${item.achId.replace(/[:]/g, '-')}.png`);
+  };
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <section className="modal share-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-head">
+          <h2>Share your card</h2>
+          <button className="icon" onClick={onClose}>x</button>
+        </div>
+        {error && <p className="muted">{error}</p>}
+        {!png && !error && <p className="muted">Drawing your card…</p>}
+        {png && <img className="share-preview" src={png} alt={`${item.title} — ${item.period}`} />}
+        <div className="share-actions">
+          <button className="primary" disabled={!png} onClick={() => share('linkedin')}>Share on LinkedIn</button>
+          <button className="wa" disabled={!png} onClick={() => share('whatsapp')}>Share on WhatsApp</button>
+          <button className="secondary" disabled={!png} onClick={justDownload}>Download card</button>
+        </div>
+        <div className="caption-box">
+          <div className="caption-head">
+            <b>Your caption</b>
+            <button className="mini-copy" onClick={async () => setCopied(await copyText(caption))}>
+              {copied ? 'Copied ✓' : 'Copy'}
+            </button>
+          </div>
+          <textarea value={caption} onChange={e => { setCaption(e.target.value); setCopied(false); }} rows={7} />
+          <p>LinkedIn always opens an empty box — paste this in with <b>Ctrl+V</b> (<b>Cmd+V</b> on Mac). Edit it first if you like.</p>
+        </div>
+
+        <div className="tag-hint">
+          <b>Tag us in your post</b>
+          <p>In the LinkedIn box type <b>@Vicharanashala</b> and pick the lab page, then <b>@Sakshi</b> and pick her
+          from the list. Choosing from the list is what makes it a real tag — typed text alone doesn't reach us.</p>
+          <div className="tag-links">
+            <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
+            <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
+          </div>
+        </div>
+        <p className="muted share-note">
+          On a phone, Share hands the picture straight to the app you pick. On a computer it posts your verify link,
+          which shows the card in the post — and anyone who clicks it lands on proof the achievement is real.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+// Public credential check behind the QR — no login, and deliberately nothing
+// beyond the name, what was won, and when.
+function VerifyView({ code }) {
+  const [state, setState] = useState({ loading: true });
+  useEffect(() => {
+    fetch(`${API}/verify/${encodeURIComponent(code)}`)
+      .then(r => r.ok ? r.json() : { valid: false })
+      .then(d => setState({ loading: false, ...d }))
+      .catch(() => setState({ loading: false, valid: false }));
+  }, [code]);
+
+  return (
+    <main className="page verify-page">
+      <section className="panel verify-card">
+        {state.loading ? <p className="muted">Checking…</p> : state.valid ? (
+          <>
+            <span className="verify-ok">✓ Verified achievement</span>
+            <div className="verify-medal">{state.icon}</div>
+            <h1>{state.title}</h1>
+            <p className="verify-period">{state.period}</p>
+            <p className="verify-awarded">Awarded to</p>
+            <p className="verify-name">{state.name}</p>
+            <p className="muted">{state.programme}</p>
+            <p className="muted">Awarded {new Date(state.earnedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            <p className="verify-code">{state.verifyId}</p>
+          </>
+        ) : (
+          <>
+            <span className="verify-bad">Not found</span>
+            <h1>We can't verify this card</h1>
+            <p className="muted">No achievement matches the code <b>{code}</b>. A genuine Spurti card carries a code issued by the system — if this one doesn't resolve, it wasn't issued here.</p>
+          </>
+        )}
+      </section>
+    </main>
   );
 }
 

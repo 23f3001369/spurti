@@ -178,6 +178,37 @@ Client: `LeaderboardPanel` (a preset dropdown). Population = `activeFilter`
 > in `server/config.js SESSION_LABELS`. The display path in `server/services/sp.js`
 > iterates the old labels and is out of sync — known issue to reconcile.
 
+## Achievements — permanent cards + public verify (env-gated)
+
+A student **Achievements tab** of permanent, once-earned cards, each shareable as
+a PNG carrying a QR to a public verify page.
+
+- **`achievements` collection** — one row per achievement, unique on
+  `(studentId, achId)`. Two kinds: **rank** (1st/2nd/3rd on a global board,
+  awarded by the leaderboard build; a weekly win carries its week in the `achId`,
+  so taking the same board in a later week is a new card) and **milestone**
+  (Legend ≥1500 highest-ever SP, Level 5/10/15/20/25, the 3,600-minute club),
+  settled and persisted on read in `server/services/achievements.js`.
+- Every row gets a **`verifyId`** (`SPRT-XXXX-XXXX`, ambiguity-free alphabet).
+  `GET /spurti/verify/:code` is a **public, no-login** page — name, what was won,
+  when, nothing else — and the card's QR points at it. The page is served with
+  og: tags so a posted link expands into a preview of the card; that preview
+  image is the PNG the browser hands back via `POST /api/share/card`, stored
+  under `CARD_DIR` (default `server/data/cards`, regenerable).
+- **`shareevents`** logs every share/download (platform + achievement), surfaced
+  in `/api/admin/analytics` — the point of the feature is knowing whether
+  students actually post them.
+
+**Env switches** (`server/.env`, all default OFF — the feature ships dark):
+
+| var | effect |
+| --- | --- |
+| `ACHIEVEMENTS_ENABLED=1` | tab visible to the whole cohort. **Also** turns on tie-aware "1224" ranking in the leaderboard build and the minting of podium cards — with it off, the build ranks 1,2,3… exactly as before and awards nothing. |
+| `ACHIEVEMENTS_EMAILS=a@b.com,…` | named accounts see the tab while it is otherwise off (preview on live data) |
+| `ACHIEVEMENTS_SHARING=1` | Share/Download buttons, and the `share/card` + `share/track` endpoints. Requires the tab to be visible; never the other way round |
+
+Flipping any of them is a `.env` edit + PM2 restart — no rebuild, no redeploy.
+
 ## Legacy scripts (`server/scripts/`, superseded by `pipeline/`)
 
 `ingestSession.js`, `rebuild.js`, `syncStudents.js`, `seed.js`, `ingestChat.js`,
