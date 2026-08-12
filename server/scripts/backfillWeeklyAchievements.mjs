@@ -108,8 +108,11 @@ const skipped = [...weekCounts.entries()].filter(([t, n]) => t < programmeStart.
 if (skipped.length) {
   const reason = (t, n) => `${new Date(t).toISOString().slice(0, 10)} (${n}` +
     (t < hardFloor.getTime() ? ', pre-programme' : `, under ${MIN_PARTICIPANTS}`) + ')';
+  // IST calendar date, not the UTC instant: 15 May 00:00 IST is 14 May 18:30 UTC,
+  // so slicing the raw ISO string would report the start as the 14th.
+  const istDay = (d) => new Date(d.getTime() + IST_MS).toISOString().slice(0, 10);
   console.log(`note: ${skipped.length} week(s) rejected before the programme start ` +
-              `(${PROGRAMME_START.toISOString().slice(0, 10)}) — ${skipped.map(([t, n]) => reason(t, n)).join(', ')}. ` +
+              `(${istDay(PROGRAMME_START)}) — ${skipped.map(([t, n]) => reason(t, n)).join(', ')}. ` +
               `Stray or mis-dated ledger rows; worth fixing separately.`);
 }
 
