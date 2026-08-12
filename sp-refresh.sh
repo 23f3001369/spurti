@@ -56,7 +56,12 @@ touch "$HEALTH"
 # Read ONLY the alert keys out of .env. Deliberately not `set -a; . .env` —
 # that would export every secret in the file into every child process for the
 # rest of the run, to configure one webhook.
-_envget() { grep -E "^$1=" "$REPO/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'\r"; }
+# `|| true` is load-bearing: this script runs under `set -euo pipefail`, and a
+# grep that matches nothing exits 1. Without it, an ABSENT optional key aborts
+# the whole refresh before it logs anything — which is exactly what happened to
+# the 12:00 run on 2026-08-12: lock file and step-health.tsv created, not one
+# line written, no SP rescored, and no error anywhere to explain it.
+_envget() { grep -E "^$1=" "$REPO/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'\r" || true; }
 ALERT_WEBHOOK_URL="${ALERT_WEBHOOK_URL:-$(_envget ALERT_WEBHOOK_URL)}"
 ALERT_WEBHOOK_SECRET="${ALERT_WEBHOOK_SECRET:-$(_envget ALERT_WEBHOOK_SECRET)}"
 
@@ -76,6 +81,18 @@ notify() {
   curl -fsS -m 15 -X POST "$ALERT_WEBHOOK_URL" \
        -H 'Content-Type: application/json' --data "$payload" >/dev/null 2>&1 \
     || log "(alert webhook POST failed — the alert is still in this log)"
+}
+
+# Rewrite one step's row in the health file, leaving the others untouched.
+# awk reads from /dev/null as well as the file: with an unset or empty filename
+# awk falls back to STDIN and blocks forever, which would hang the whole refresh
+# rather than fail it.
+_health_set() {
+  local name="$1" status="$2" fails="$3" lastok="$4" tmp
+  tmp=$(mktemp)
+  awk -F'\t' -v n="$name" '$1!=n' "$HEALTH" > "$tmp" 2>/dev/null </dev/null || true
+  printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$status" "$(date -u +%FT%TZ)" "$fails" "$lastok" >> "$tmp"
+  mv "$tmp" "$HEALTH"
 }
 
 # run_step <name> <fatal|nonfatal> <note-on-failure> <command...>
