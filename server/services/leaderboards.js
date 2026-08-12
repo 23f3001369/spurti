@@ -48,6 +48,26 @@ function weekLabel(weekStartUtc) {
 // A placing shared by more than this many people isn't a placing.
 const TIE_MAX = 3;
 
+// The weekly TOTAL board measures what a student did during that week, so the
+// +100 `initial` joining grant is excluded: it is awarded for starting, not for
+// anything done, and a student who joined mid-week would otherwise top the board
+// on it alone — beating people who actually earned points. Found when a backfill
+// dry run put a joining grant first with 100 SP and real poll work second on 40.
+//
+// All-time is deliberately unaffected: there the grant is a legitimate part of a
+// lifetime total, and that board reads from `students.totalSp` anyway. The
+// per-category weekly boards are unaffected too, since `initial` is not one of
+// CATS. `manual` is still counted — discretionary SP is a real award for real
+// work, unlike a joining bonus — but it is the next candidate if that changes.
+export const WEEKLY_EXCLUDED_CATEGORIES = ['initial'];
+
+export function weeklyTotal(row) {
+  if (!row) return 0;
+  let t = row.total;
+  for (const c of WEEKLY_EXCLUDED_CATEGORIES) t -= (row.cat[c] || 0);
+  return t;
+}
+
 const levelOfStudent = (s) => levelFor(Math.max(Number(s.highestSpEver) || 0, Number(s.totalSp) || 0));
 
 // Sorted rows for a board. `tieAware` selects standard competition ("1224")
@@ -142,7 +162,7 @@ export async function computeAndStoreLeaderboards() {
   // Tie-aware ranking only once the feature is live; see rankRows.
   const build = (subset, valueOf) => rankRows(subset, valueOf, awardsOn);
 
-  const wTotal = (sid) => (weekMap.get(sid)?.total) || 0;
+  const wTotal = (sid) => weeklyTotal(weekMap.get(sid));
   const wCat = (cat) => (sid) => (weekMap.get(sid)?.cat[cat]) || 0;
   const aCat = (cat) => (sid) => (allMap.get(sid)?.cat[cat]) || 0;
   const byId = new Map(students.map((s) => [String(s._id), s]));
@@ -196,7 +216,7 @@ export async function computeAndStoreLeaderboards() {
 
   if (awardsOn) {
     const prevWeekMap = await sumByStudentCat({ dateTime: { $gte: prevWeekStart, $lt: weekStart } });
-    const pTotal = (sid) => (prevWeekMap.get(sid)?.total) || 0;
+    const pTotal = (sid) => weeklyTotal(prevWeekMap.get(sid));
     const pCat = (cat) => (sid) => (prevWeekMap.get(sid)?.cat[cat]) || 0;
     const wk = weekKey(prevWeekStart);
 

@@ -10,8 +10,9 @@
 //   node server/scripts/backfillWeeklyAchievements.mjs --from 2026-06-01
 //   node server/scripts/backfillWeeklyAchievements.mjs --apply
 //
-//   --from YYYY-MM-DD   first week to consider (default: week of the earliest SP
-//                       transaction). Snapped back to that week's Monday.
+//   --from YYYY-MM-DD   first week to consider (default: the programme start —
+//                       NOT the earliest transaction, which can be junk data).
+//                       Snapped back to that week's Monday.
 //   --to   YYYY-MM-DD   last week to consider (default: the last COMPLETED week —
 //                       the week in progress is never awarded)
 //   --board total|poll|…  restrict to one board
@@ -30,7 +31,8 @@ import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import Achievement, { awardAchievements } from '../models/Achievement.js';
 import {
-  rankRows, weeklyPodiumSpecs, sumByStudentCat, weekStartIST, weekKey, weekLabel, CATS
+  rankRows, weeklyPodiumSpecs, sumByStudentCat, weeklyTotal,
+  weekStartIST, weekKey, weekLabel, CATS, WEEKLY_EXCLUDED_CATEGORIES
 } from '../services/leaderboards.js';
 
 const WEEK = 7 * 86400000;
@@ -57,9 +59,32 @@ const lastCompleted = new Date(weekStartIST(new Date()).getTime() - WEEK);
 const firstTx = await SPTransaction.find({}, { dateTime: 1 }).sort({ dateTime: 1 }).limit(1).lean();
 if (!firstTx.length) { console.error('no SP transactions — nothing to backfill'); process.exit(1); }
 
+// The floor is the internship, NOT the earliest transaction. The ledger contains
+// rows dated well outside the programme — there is one in 2006 — and taking the
+// earliest of those as the start walked twenty years of empty weeks and minted a
+// card for a phantom "Week of Jul 31 – Aug 6, 2006". A card is a permanent public
+// credential; it should never be issued for a week the programme did not run.
+const firstStart = await Student.find(
+  { status: { $ne: 'excused' }, internshipStartDate: { $ne: null } },
+  { internshipStartDate: 1 }
+).sort({ internshipStartDate: 1 }).limit(1).lean();
+const programmeStart = firstStart.length ? new Date(firstStart[0].internshipStartDate) : null;
+
+const stray = await SPTransaction.countDocuments(
+  programmeStart ? { dateTime: { $lt: programmeStart } } : { _id: null }
+);
+if (stray) {
+  console.log(`note: ${stray} SP transaction(s) are dated before the programme started ` +
+              `(${programmeStart.toISOString().slice(0, 10)}). They are excluded from the default range; ` +
+              `pass --from explicitly to include them. Worth investigating separately — it is a ledger issue, not an achievements one.`);
+}
+
 const fromArg = arg('--from');
 const toArg = arg('--to');
-let from = weekStartIST(fromArg ? new Date(`${fromArg}T00:00:00+05:30`) : new Date(firstTx[0].dateTime));
+let from = weekStartIST(
+  fromArg ? new Date(`${fromArg}T00:00:00+05:30`)
+          : new Date(Math.max(new Date(firstTx[0].dateTime).getTime(), programmeStart?.getTime() ?? 0))
+);
 let to = toArg ? weekStartIST(new Date(`${toArg}T00:00:00+05:30`)) : lastCompleted;
 if (to > lastCompleted) {
   console.log(`--to is in the current week; clamped to the last completed week (${weekKey(lastCompleted)})`);
@@ -82,6 +107,7 @@ const held = new Set(
 
 console.log(`backfill ${weekKey(from)} … ${weekKey(to)}   boards: ${BOARDS.join(', ')}`);
 console.log(`${students.length} non-excused students, ${held.size} weekly placings already held`);
+console.log(`weekly Overall SP excludes: ${WEEKLY_EXCLUDED_CATEGORIES.join(', ')}`);
 console.log(APPLY ? '\nMODE: APPLY — cards will be written\n' : '\nMODE: dry run — nothing will be written\n');
 
 const all = [];
@@ -99,7 +125,7 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   const specs = [];
   for (const category of BOARDS) {
     const valueOf = category === 'total'
-      ? (sid) => (map.get(sid)?.total) || 0
+      ? (sid) => weeklyTotal(map.get(sid))
       : (sid) => (map.get(sid)?.cat[category]) || 0;
     specs.push(...weeklyPodiumSpecs({
       rows: rankRows(students, valueOf, true),

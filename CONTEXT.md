@@ -161,6 +161,10 @@ can return the top 50 AND the caller's own rank even outside it):
 - **Windows:** `week` (fixed **Mon 00:00 IST reset**) and `all` (all-time).
 - **Categories:** `total` + per-category `attendance` / `poll` / `spa` (combined
   learn+teach) / `query`. Weekly boards rank by SP *earned in the window*;
+  the weekly **total** board excludes the `initial` joining grant
+  (`WEEKLY_EXCLUDED_CATEGORIES`) — it is awarded for starting, not for anything
+  done, and a mid-week joiner would otherwise top the board on +100 alone ahead
+  of people who actually earned. All-time is unaffected (it reads `totalSp`);
   category boards by SP *from that category*; all-time-total by `students.totalSp`.
 - **Scope:** global, plus **cohort** (onboarding `leaderboardGroup`) for the total
   board.
