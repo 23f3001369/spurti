@@ -10,8 +10,9 @@
 //   node server/scripts/backfillWeeklyAchievements.mjs --from 2026-06-01
 //   node server/scripts/backfillWeeklyAchievements.mjs --apply
 //
-//   --from YYYY-MM-DD   first week to consider (default: week of the earliest SP
-//                       transaction). Snapped back to that week's Monday.
+//   --from YYYY-MM-DD   first week to consider (default: the programme start —
+//                       NOT the earliest transaction, which can be junk data).
+//                       Snapped back to that week's Monday.
 //   --to   YYYY-MM-DD   last week to consider (default: the last COMPLETED week —
 //                       the week in progress is never awarded)
 //   --board total|poll|…  restrict to one board
@@ -57,9 +58,32 @@ const lastCompleted = new Date(weekStartIST(new Date()).getTime() - WEEK);
 const firstTx = await SPTransaction.find({}, { dateTime: 1 }).sort({ dateTime: 1 }).limit(1).lean();
 if (!firstTx.length) { console.error('no SP transactions — nothing to backfill'); process.exit(1); }
 
+// The floor is the internship, NOT the earliest transaction. The ledger contains
+// rows dated well outside the programme — there is one in 2006 — and taking the
+// earliest of those as the start walked twenty years of empty weeks and minted a
+// card for a phantom "Week of Jul 31 – Aug 6, 2006". A card is a permanent public
+// credential; it should never be issued for a week the programme did not run.
+const firstStart = await Student.find(
+  { status: { $ne: 'excused' }, internshipStartDate: { $ne: null } },
+  { internshipStartDate: 1 }
+).sort({ internshipStartDate: 1 }).limit(1).lean();
+const programmeStart = firstStart.length ? new Date(firstStart[0].internshipStartDate) : null;
+
+const stray = await SPTransaction.countDocuments(
+  programmeStart ? { dateTime: { $lt: programmeStart } } : { _id: null }
+);
+if (stray) {
+  console.log(`note: ${stray} SP transaction(s) are dated before the programme started ` +
+              `(${programmeStart.toISOString().slice(0, 10)}). They are excluded from the default range; ` +
+              `pass --from explicitly to include them. Worth investigating separately — it is a ledger issue, not an achievements one.`);
+}
+
 const fromArg = arg('--from');
 const toArg = arg('--to');
-let from = weekStartIST(fromArg ? new Date(`${fromArg}T00:00:00+05:30`) : new Date(firstTx[0].dateTime));
+let from = weekStartIST(
+  fromArg ? new Date(`${fromArg}T00:00:00+05:30`)
+          : new Date(Math.max(new Date(firstTx[0].dateTime).getTime(), programmeStart?.getTime() ?? 0))
+);
 let to = toArg ? weekStartIST(new Date(`${toArg}T00:00:00+05:30`)) : lastCompleted;
 if (to > lastCompleted) {
   console.log(`--to is in the current week; clamped to the last completed week (${weekKey(lastCompleted)})`);
@@ -86,7 +110,7 @@ console.log(APPLY ? '\nMODE: APPLY — cards will be written\n' : '\nMODE: dry r
 
 const all = [];
 const perStudent = new Map();
-let weeks = 0, emptyWeeks = 0;
+let weeks = 0, emptyWeeks = 0, initialWins = 0;
 
 for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   const we = new Date(ws.getTime() + WEEK);
@@ -113,7 +137,16 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
   console.log(`${period}  (${wk})  → ${specs.length} card${specs.length === 1 ? '' : 's'}`);
   for (const s of specs) {
     const [, cat, , , place] = s.doc.achId.split(':');
-    console.log(`    ${place}. ${cat.padEnd(11)} ${nameOf.get(s.doc.studentId)}  ${s.doc.detail}`);
+    // A weekly board sums EVERY category over the window, `initial` included, so
+    // a student who joined that week can top it on the +100 joining grant alone
+    // without having done anything. Flagged rather than silently filtered: the
+    // same is true of the live build, so changing it is a decision about what a
+    // weekly board means, not something this script should decide on its own.
+    const row = map.get(s.doc.studentId);
+    const initialOnly = cat === 'total' && row && (row.cat.initial || 0) === row.total && row.total > 0;
+    if (initialOnly) initialWins += 1;
+    console.log(`    ${place}. ${cat.padEnd(11)} ${nameOf.get(s.doc.studentId)}  ${s.doc.detail}` +
+                (initialOnly ? '   ⚠ joining grant only' : ''));
     perStudent.set(s.doc.studentId, (perStudent.get(s.doc.studentId) || 0) + 1);
     held.add(s.doc.achId);          // so a later week in this same run can't re-add it
   }
@@ -122,6 +155,12 @@ for (let ws = new Date(from); ws <= to; ws = new Date(ws.getTime() + WEEK)) {
 
 console.log(`\n${weeks} week(s) examined, ${emptyWeeks} with no qualifying placing`);
 console.log(`${all.length} card(s) to mint across ${perStudent.size} student(s)`);
+if (initialWins) {
+  console.log(`\n⚠  ${initialWins} of these are Overall-SP placings won on the joining grant alone —`);
+  console.log('   the student earned nothing that week beyond the +100 for starting. A weekly board');
+  console.log('   sums every category including `initial`, and the LIVE build does the same, so this');
+  console.log('   is worth settling before go-live rather than only here.');
+}
 
 const top = [...perStudent.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
 if (top.length) {
