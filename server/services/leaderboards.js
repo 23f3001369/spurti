@@ -30,6 +30,12 @@ function weekStartIST(now) {
   const monMidnightIst = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - daysSinceMon);
   return new Date(monMidnightIst - IST_MS);
 }
+// The week's Monday as an IST calendar date. A week starts at 00:00 IST, which
+// is 18:30 UTC the evening BEFORE, so slicing the UTC instant would name every
+// week after the preceding Sunday — "2026-08-02" for the week of Aug 3–9.
+function weekKey(weekStartUtc) {
+  return new Date(weekStartUtc.getTime() + IST_MS).toISOString().slice(0, 10);
+}
 function weekLabel(weekStartUtc) {
   const s = new Date(weekStartUtc.getTime() + IST_MS);
   const e = new Date(s.getTime() + 6 * 86400000);
@@ -64,8 +70,20 @@ export async function computeAndStoreLeaderboards() {
   // unique 1,2,3… ranks and no cards. Read here, not at import, so the flag is
   // whatever the .env said when the process started, however it was started.
   const awardsOn = process.env.ACHIEVEMENTS_ENABLED === '1';
+  // All-time podiums are a SEPARATE switch, default off, because unlike a week
+  // an all-time board never settles while the programme is running. Awarding it
+  // live handed every successive leader their own permanent "1st place,
+  // All-time" card — three leaders, three cards, all verifying as genuine, none
+  // of them exclusive. There is no completed period to award from, so the only
+  // honest moment is one the operator picks: flip this at programme end and a
+  // single settled set is minted.
+  const allTimeOn = awardsOn && process.env.ACHIEVEMENTS_ALLTIME === '1';
   const weekStart = weekStartIST(now);
   const label = weekLabel(weekStart);
+  // The week the cards are for. The boards on screen still show the week in
+  // progress; only the awarding waits for it to finish.
+  const prevWeekStart = new Date(weekStart.getTime() - 7 * 86400000);
+  const prevLabel = weekLabel(prevWeekStart);
 
   const students = await Student.find(
     { status: { $ne: 'excused' } },
@@ -123,11 +141,17 @@ export async function computeAndStoreLeaderboards() {
   await Promise.all(boards.map((b) => LeaderboardSnapshot.updateOne({ boardKey: b.boardKey }, { $set: b }, { upsert: true })));
   await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
 
-  // Award permanent podium achievements — 1st, 2nd and 3rd on each GLOBAL board,
-  // weekly and all-time. Idempotent: `earnedAt` and `verifyId` are set on insert
-  // only, so re-running the build six-hourly never mints a second card for the
-  // same board+period. A weekly win carries its week in the achId, so winning
-  // the same board in a later week IS a new, separately shareable achievement.
+  // Award permanent podium achievements — 1st, 2nd and 3rd on each GLOBAL board.
+  //
+  // WEEKLY CARDS COME FROM THE LAST COMPLETED WEEK, NEVER THE ONE IN PROGRESS.
+  // Awarding live looked idempotent but was not: the upsert is keyed on
+  // (studentId, achId) and achId carries no student, so a different leader at
+  // the next six-hourly run did not replace the previous one — they were handed
+  // their own row. Monday's leader, Wednesday's and Sunday's would each end up
+  // holding a permanent, independently verifiable "1st place, week of X" card
+  // for the same board. Four runs a day meant up to 28 holders of one placing.
+  // A finished week's standings cannot move, so awarding from them gives one
+  // set of winners and makes re-running genuinely a no-op.
   //
   // Not awarded here (deliberate, v1 scope):
   //  · onboarding-group boards — they overlap the cohort-wide win and would more
@@ -136,23 +160,52 @@ export async function computeAndStoreLeaderboards() {
   //    a field of thirty, which isn't the same achievement as a podium.
   const TIE_MAX = 3;      // a place shared by more than 3 people isn't a placing
   const ops = [];
+  let awardBoards = [];
+  let settled = new Set();
+
+  if (awardsOn) {
+    const prevWeekMap = await sumByStudentCat({ dateTime: { $gte: prevWeekStart, $lt: weekStart } });
+    const pTotal = (sid) => (prevWeekMap.get(sid)?.total) || 0;
+    const pCat = (cat) => (sid) => (prevWeekMap.get(sid)?.cat[cat]) || 0;
+
+    awardBoards = [
+      { window: 'week', category: 'total', rows: build(students, pTotal) },
+      ...CATS.map((cat) => ({ window: 'week', category: cat, rows: build(students, pCat(cat)) })),
+      ...(allTimeOn
+        ? boards.filter((b) => b.window === 'all' && b.scope === 'all')
+            .map((b) => ({ window: 'all', category: b.category, rows: b.rows }))
+        : [])
+    ];
+
+    // Belt and braces against a placing being awarded twice with different
+    // winners — a late backdated transaction could shift even a settled week's
+    // standings, and an all-time board moves whenever anyone earns. Once a
+    // placing has any holder it is closed, so ties (awarded together in one
+    // batch) still work while a later challenger cannot claim the same title.
+    const wk = weekKey(prevWeekStart);
+    const already = await Achievement.find(
+      { $or: [{ achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: { $regex: '^rank:[^:]+:all:all:' } }] },
+      { achId: 1 }
+    ).lean();
+    settled = new Set(already.map((a) => a.achId));
+  }
+
   const add = (r, b, place) => {
-    const wk = b.window === 'week' ? weekStart.toISOString().slice(0, 10) : 'all';
+    const wk = b.window === 'week' ? weekKey(prevWeekStart) : 'all';
     const achId = `rank:${b.category}:${b.window}:${wk}:${place}`;
+    if (settled.has(achId)) return;                  // this placing is already awarded
     ops.push({
       filter: { studentId: r.studentId, achId },
       doc: {
         studentId: r.studentId, achId, kind: 'rank', board: b.category, place,
         icon: PLACE_ICON[place], title: ACH_TITLE[b.category],
-        period: b.window === 'week' ? `Week of ${label}` : 'All-time',
+        period: b.window === 'week' ? `Week of ${prevLabel}` : 'All-time',
         periodKey: wk,
         detail: `${r.sp} SP`, earnedAt: now
       }
     });
   };
-  for (const b of boards) {
-    if (!awardsOn) break;
-    if (b.scope !== 'all') continue;                 // global boards only in v1
+  for (const b of awardBoards) {
     for (const place of [1, 2, 3]) {
       const tied = b.rows.filter((r) => r.rank === place);
       // A placing needs a real score: the top of a table of zeroes is not a win.
@@ -162,5 +215,9 @@ export async function computeAndStoreLeaderboards() {
   }
   if (ops.length) await awardAchievements(ops);
 
-  return { boards: boards.length, groups: groups.length, achievementOps: ops.length, weekStart, weekLabel: label, students: students.length };
+  return {
+    boards: boards.length, groups: groups.length, achievementOps: ops.length,
+    weekStart, weekLabel: label, awardedWeek: awardsOn ? prevLabel : null,
+    students: students.length
+  };
 }

@@ -229,7 +229,25 @@ OFF, so the feature ships dark):
 | `ACHIEVEMENTS_ENABLED=1` | tab visible to the whole cohort. **Also** turns on tie-aware "1224" ranking in the leaderboard build and the minting of podium cards — with it off, the build ranks 1,2,3… exactly as before and awards nothing. |
 | `ACHIEVEMENTS_EMAILS=a@b.com,…` | named accounts see the tab while it is otherwise off (preview on live data) |
 | `ACHIEVEMENTS_SHARING=1` | Share/Download buttons, and the `share/card` + `share/track` endpoints. Requires the tab to be visible; never the other way round |
+| `ACHIEVEMENTS_ALLTIME=1` | mints **all-time** podium cards. Separate switch, default off — see below. Flip it **once, at programme end** |
 | `VERIFY_VIEW_LOG=0` | turns OFF verify-page view logging (defaults ON). The one switch here that defaults on, because the log is what makes reach measurable at all |
+
+**When podium cards are awarded.** Weekly cards come from the **last completed
+week**, never the one in progress. Awarding live only looked idempotent: the
+upsert is keyed on `(studentId, achId)` and `achId` carries no student, so a new
+leader at the next six-hourly run was handed their *own* row rather than
+replacing the previous holder — up to 28 students could each hold a permanent,
+independently verifiable "1st place, week of X" card for the same board. A
+finished week cannot move, so awarding from it yields one set of winners.
+
+All-time boards have the same failure and **no completed period to award from** —
+they only settle when the programme does. Hence `ACHIEVEMENTS_ALLTIME`, off by
+default. Flipping it mints one settled set from the standings **at that moment**
+and closes those titles for good, so flip it at the end; doing it early freezes
+whoever happens to be ahead. Both paths are backed by a settled-placing guard:
+once a placing has any holder it is closed, which still allows ties (awarded
+together in one batch) but stops a later challenger claiming the same title —
+including after a backdated transaction shifts a past week's standings.
 
 Flipping any of them is a `.env` edit + PM2 restart — no rebuild, no redeploy.
 
