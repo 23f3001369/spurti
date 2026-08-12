@@ -906,7 +906,8 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
       topDrops
     },
     sharing: shareSummary(shares, achievements, views, last7Days),
-    reigns: reignSummary(reigns)
+    reigns: reignSummary(reigns),
+    pipeline: pipelineHealth()
   });
 });
 
@@ -1055,6 +1056,34 @@ function reignSummary(reigns) {
     medianDays: median(rows.filter((r) => !r.current).map((r) => r.days)),
     history: rows.slice(0, 40)
   };
+}
+
+// Pipeline health, written by sp-refresh.sh's run_step (logs/step-health.tsv:
+// name \t status \t lastRun \t consecutiveFailures \t lastOk). Surfaced on the
+// admin dashboard because a failing step that only writes to a log file is a
+// step nobody notices — sync-attendance-records failed 31 runs over eight days
+// exactly that way.
+const STEP_HEALTH_FILE = process.env.STEP_HEALTH_FILE || path.join(rootDir, 'logs', 'step-health.tsv');
+function pipelineHealth() {
+  try {
+    if (!fs.existsSync(STEP_HEALTH_FILE)) return { available: false, steps: [] };
+    const steps = fs.readFileSync(STEP_HEALTH_FILE, 'utf8').split('\n')
+      .map((l) => l.split('\t'))
+      .filter((c) => c.length >= 4 && c[0])
+      .map(([name, status, lastRun, fails, lastOk]) => ({
+        name, status, lastRun, lastOk: lastOk || null,
+        consecutiveFailures: Number(fails) || 0
+      }))
+      .sort((a, b) => b.consecutiveFailures - a.consecutiveFailures || a.name.localeCompare(b.name));
+    return {
+      available: true,
+      failing: steps.filter((s) => s.status !== 'ok').length,
+      alerting: steps.filter((s) => s.consecutiveFailures >= 2).length,
+      steps
+    };
+  } catch {
+    return { available: false, steps: [] };
+  }
 }
 
 function last24Hours(now) {
