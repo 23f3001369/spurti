@@ -1,7 +1,7 @@
 import Student from '../models/Student.js';
 import SPTransaction from '../models/SPTransaction.js';
 import LeaderboardSnapshot from '../models/LeaderboardSnapshot.js';
-import Achievement, { newVerifyId } from '../models/Achievement.js';
+import Achievement, { awardAchievements } from '../models/Achievement.js';
 import { levelFor } from './levels.js';
 
 const CAT_LABEL = { total: 'Overall', attendance: 'Best Attendance', poll: 'Poll Champions', spa: 'Top SPA', query: 'Top Query Answerers' };
@@ -139,15 +139,16 @@ export async function computeAndStoreLeaderboards() {
   const add = (r, b, place) => {
     const wk = b.window === 'week' ? weekStart.toISOString().slice(0, 10) : 'all';
     const achId = `rank:${b.category}:${b.window}:${wk}:${place}`;
-    ops.push({ updateOne: {
+    ops.push({
       filter: { studentId: r.studentId, achId },
-      update: { $setOnInsert: {
+      doc: {
         studentId: r.studentId, achId, kind: 'rank', board: b.category, place,
         icon: PLACE_ICON[place], title: ACH_TITLE[b.category],
         period: b.window === 'week' ? `Week of ${label}` : 'All-time',
-        detail: `${r.sp} SP`, verifyId: newVerifyId(), earnedAt: now
-      } },
-      upsert: true } });
+        periodKey: wk,
+        detail: `${r.sp} SP`, earnedAt: now
+      }
+    });
   };
   for (const b of boards) {
     if (!awardsOn) break;
@@ -159,7 +160,7 @@ export async function computeAndStoreLeaderboards() {
       for (const r of tied) add(r, b, place);
     }
   }
-  if (ops.length) await Achievement.bulkWrite(ops, { ordered: false });
+  if (ops.length) await awardAchievements(ops);
 
   return { boards: boards.length, groups: groups.length, achievementOps: ops.length, weekStart, weekLabel: label, students: students.length };
 }

@@ -305,30 +305,109 @@ export async function renderCard(a, s, verifyUrl) {
   return canvas.toDataURL('image/png');
 }
 
-// The caption a student posts with the card. The four hashtags and the profile
-// tag are what make the posts findable when we go looking for reach. When a
-// verify URL is passed it goes in too — that link is what LinkedIn expands into
-// a preview of the card, so a post carries the image even without an upload.
-export function shareCaption(a, forWhatsApp = false, verifyUrl = '') {
-  const what = a.period && a.period !== 'All-time' ? `${a.title} (${a.period})` : a.title;
-  // No profile link in the text. LinkedIn only turns a name into a real tag when
-  // it's picked from the composer's @-dropdown — pasted text never notifies
-  // anyone, it just reads like a footnote. The UI asks for the tag instead.
-  // Hashtags do survive a paste, which is why they stay.
+// The caption is about the achievement, not about the system that issued it.
+// Three beats carry it: what was won, what earning it actually involved, and a
+// line worth reading. Nobody's feed needs the scoring rules explained.
+const WON_IT_BY = {
+  total: {
+    1: 'Top of the cohort on overall points — earned across standups, polls, peer-learning sessions, and the questions I answered for other interns.',
+    2: 'Second across the whole cohort — standups, polls, peer-learning sessions, and the questions I answered for other interns.',
+    3: 'Third across the whole cohort — standups, polls, peer-learning sessions, and the questions I answered for other interns.'
+  },
+  attendance: {
+    1: 'This one is just for showing up. Every standup, start to finish, week after week.',
+    2: 'This one is just for showing up. Every standup, start to finish, week after week.',
+    3: 'This one is just for showing up. Every standup, start to finish, week after week.'
+  },
+  poll: {
+    1: 'Won inside the sessions themselves — reading the question properly and getting the answer right more often than anyone else.',
+    2: 'Won inside the sessions themselves — reading the question properly and getting the answer right, more often than almost anyone.',
+    3: 'Won inside the sessions themselves — reading the question properly and getting the answer right, more often than almost anyone.'
+  },
+  spa: {
+    1: 'Earned by sitting down with other interns — learning from them, and teaching what I had already worked out.',
+    2: 'Earned by sitting down with other interns — learning from them, and teaching what I had already worked out.',
+    3: 'Earned by sitting down with other interns — learning from them, and teaching what I had already worked out.'
+  },
+  query: {
+    1: 'Earned by being the one who answered when other interns were stuck.',
+    2: 'Earned by answering other interns when they were stuck.',
+    3: 'Earned by answering other interns when they were stuck.'
+  }
+};
+
+// One quote per board and per milestone. Attributions are the real ones: the
+// "excellence is a habit" line is Durant's gloss on Aristotle, not Aristotle,
+// and is credited that way here because the post is public and someone will check.
+const QUOTES = {
+  total: '"We are what we repeatedly do. Excellence, then, is not an act, but a habit."\n— Will Durant',
+  attendance: '"Little by little, a little becomes a lot."\n— Tanzanian proverb',
+  poll: '"The important thing is not to stop questioning."\n— Albert Einstein',
+  spa: '"While we teach, we learn."\n— Seneca',
+  query: '"No one has ever become poor by giving."\n— Anne Frank',
+  level: '"A journey of a thousand miles begins with a single step."\n— Lao Tzu',
+  legend: '"Excellence is a continuous process and not an accident."\n— A. P. J. Abdul Kalam',
+  club3600: '"You can\'t cross the sea merely by standing and staring at the water."\n— Rabindranath Tagore'
+};
+
+// Legend's threshold is a server-side number that may well be raised later, so
+// the figure is read back out of the achievement's own `detail` ("Crossed 1,500
+// SP") rather than written in here — a hardcoded 1,500 would keep printing in
+// captions long after the cards had stopped meaning it.
+function legendPoints(a) {
+  const n = /([\d,]+)\s*SP/i.exec(a.detail || '');
+  return n ? `${n[1]} Spurti Points` : 'The Legend badge';
+}
+
+function whatItTook(a) {
+  if (a.kind === 'rank') return WON_IT_BY[a.board]?.[a.place] || '';
+  if (a.achId === 'ms:legend') return `${legendPoints(a)}. There is no fast way to this one — it is the whole internship's work, added up.`;
+  const lvl = /^ms:level:(\d+)$/.exec(a.achId || '');
+  if (lvl) return `${(Number(lvl[1]) * 100).toLocaleString('en-IN')} Spurti Points, built up one session at a time.`;
+  if (a.achId === 'ms:club3600') return '3,600 minutes of standups — the full attendance goal for the internship, finished.';
+  return '';
+}
+
+function quoteFor(a) {
+  if (a.kind === 'rank') return QUOTES[a.board] || '';
+  if (a.achId === 'ms:legend') return QUOTES.legend;
+  if (a.achId === 'ms:club3600') return QUOTES.club3600;
+  if (/^ms:level:\d+$/.test(a.achId || '')) return QUOTES.level;
+  return '';
+}
+
+// All three podium places share one title — "Cohort Champion" is what 1st, 2nd
+// and 3rd are all called, and only the medal drawn on the card tells them apart.
+// In text there is no medal, so a 3rd place would read as an outright win unless
+// the caption says the place in words. That is what this is for.
+const PLACE_WORD = { 1: '1st place', 2: '2nd place', 3: '3rd place' };
+
+// No profile link in the text: LinkedIn only turns a name into a real tag when
+// it is picked from the composer's @-dropdown, so a pasted link notifies nobody
+// and just reads like a footnote. The modal asks for the @-tag instead.
+// Hashtags do survive a paste, which is why they stay.
+export function shareCaption(a, verifyUrl = '') {
+  const place = a.kind === 'rank' ? PLACE_WORD[a.place] : '';
+  const when = a.period && a.period !== 'All-time' ? a.period : '';
+  const head = [a.title, place, when].filter(Boolean).join(' — ');
   const lines = [
-    `🏆 Achievement unlocked on Spurti: ${what}!`,
+    `${head}.`,
     '',
-    'Part of the Vicharanashala VLED Summership at IIT Ropar, where Spurti Points track real engagement and consistency. Grateful for the momentum — onward. 🚀',
+    whatItTook(a),
     '',
-    // Two kinds of tag doing two jobs: the first three are distinctive enough to
-    // search on later and actually find these posts; the last two buy reach in
-    // feeds that don't know what Spurti is. Five is about LinkedIn's useful limit
-    // — more starts to cost reach rather than add it. "#sp" was dropped: far too
-    // common to find anything by.
-    '#Spurti #SpurtiPoints #Vicharanashala #VLEDSummership #IITRopar'
+    quoteFor(a),
+    ''
   ];
-  if (verifyUrl) lines.push('', verifyUrl);
-  return lines.join('\n');
+  // The link is the whole point of the card: it opens a page that confirms the
+  // achievement, so the post can be checked instead of taken on trust.
+  if (verifyUrl) lines.push('Verified here, if anyone wants to check:', verifyUrl, '');
+  // Two kinds of tag doing two jobs: the first three are distinctive enough to
+  // search on later and actually find these posts; the last two buy reach in
+  // feeds that don't know what Spurti is. Five is about LinkedIn's useful limit
+  // — more starts to cost reach rather than add it. "#sp" was dropped: far too
+  // common to find anything by.
+  lines.push('#Spurti #SpurtiPoints #Vicharanashala #VLEDSummership #IITRopar');
+  return lines.filter((l, i, arr) => !(l === '' && arr[i - 1] === '')).join('\n');
 }
 
 // A PNG data URL as a File, so it can go into navigator.share({ files }) — that
