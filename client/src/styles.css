@@ -789,3 +789,7 @@ tr.step-alert td { border-color: #f3c9c5; }
 .mini-copy:hover { background: var(--primary); color: #fff; }
 .caption-box textarea { width: 100%; resize: vertical; font: inherit; font-size: 12.5px; line-height: 1.55; color: #334155; padding: 10px 11px; border: 1px solid #dbe4e8; border-radius: 9px; background: #f8fafb; }
 .caption-box p { margin: 0; font-size: 12px; color: #64748b; }
+
+/* The "artwork may change" note sits under the main blurb — quieter than it,
+   so it reads as a footnote rather than a second announcement. */
+.ach-head .ach-note { font-size: 12px; margin-top: -2px; opacity: .8; }

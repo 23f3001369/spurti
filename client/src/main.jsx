@@ -474,6 +474,14 @@ function AchievementsPanel({ student, data }) {
           Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
           Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
         </p>
+        {/* Said plainly because the look of these cards HAS already changed once
+            and will again. What is permanent is the achievement and its verify
+            code, not the artwork — worth stating before someone assumes the
+            picture they downloaded is the record. */}
+        <p className="muted ach-note">
+          The look of the cards may change from time to time as we improve the design. Your achievements
+          and their verify links stay exactly as they are — only the artwork is refreshed.
+        </p>
       </section>
 
       {groups.length === 0 && locked.length === 0 && (
