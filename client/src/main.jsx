@@ -474,6 +474,14 @@ function AchievementsPanel({ student, data }) {
           Placing 1st, 2nd or 3rd on any leaderboard earns a permanent card — a new one each week you take it.
           Open a tile to see every time you placed{canShare ? ', and share any of them' : ''}.
         </p>
+        {/* Said plainly because the look of these cards HAS already changed once
+            and will again. What is permanent is the achievement and its verify
+            code, not the artwork — worth stating before someone assumes the
+            picture they downloaded is the record. */}
+        <p className="muted ach-note">
+          The look of the cards may change from time to time as we improve the design. Your achievements
+          and their verify links stay exactly as they are — only the artwork is refreshed.
+        </p>
       </section>
 
       {groups.length === 0 && locked.length === 0 && (
@@ -683,10 +691,13 @@ function ShareModal({ item, me, onClose }) {
             <li>Click <b>Share on LinkedIn</b>. Your caption is copied for you and the composer opens with your verify link already attached.</li>
             <li><b>Add the card image to the post</b> — the photo button in the composer, then the file you just downloaded. Skip this and your post is only a link.</li>
             <li><b>Paste the caption</b> (Ctrl+V / Cmd+V).</li>
-            <li><b>Tag us.</b> Type <b>@Vicharanashala</b> and pick the lab page, then <b>@Sakshi</b> and pick her from
-            the list. Picking from the dropdown is what makes it a real tag — typed text alone doesn't reach anyone.
+            <li><b>Tag us, in this order</b> — the lab first, then Sudarshan sir, then Sakshi. Type
+            <b>@Vicharanashala</b> and pick the lab page, then <b>@Sudarshan Iyengar</b>, then <b>@Sakshi</b>.
+            Picking each one from the dropdown is what makes it a real tag — typed text alone doesn't reach
+            anyone. Tag any other mentors from the lab you worked with as well.
             <span className="tag-links">
               <a href="https://www.linkedin.com/company/vicharanashala/" target="_blank" rel="noopener">The lab page →</a>
+              <a href="https://www.linkedin.com/in/sudarshan-iyengar-3560b8145/" target="_blank" rel="noopener">Sudarshan sir's profile →</a>
               <a href="https://www.linkedin.com/in/sakshivk/" target="_blank" rel="noopener">Sakshi's profile →</a>
             </span></li>
           </ol>

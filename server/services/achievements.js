@@ -10,7 +10,11 @@ const ATTENDANCE_GOAL_MIN = 3600;
 
 export const BOARD_META = {
   total: { label: 'Overall SP', icon: '🏆' },
-  attendance: { label: 'Attendance', icon: '📅' },
+  // Not a calendar: Apple prints a fixed date on 📅 (17 July, after the day iCal
+  // was announced) and every other platform prints its own, so the tile carried
+  // a date that meant nothing. These icons only face the Achievements tab —
+  // the shared card uses the persisted per-place medal from leaderboards.js.
+  attendance: { label: 'Attendance', icon: '⏳' },
   poll: { label: 'Polls', icon: '🎯' },
   spa: { label: 'Peer Learning', icon: '🤝' },
   query: { label: 'Queries', icon: '💬' }
