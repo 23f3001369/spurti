@@ -183,7 +183,14 @@ function parseCookies(header = '') {
   return Object.fromEntries(String(header).split(';').map(part => {
     const index = part.indexOf('=');
     if (index < 0) return null;
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())];
+    let value;
+    try {
+      value = decodeURIComponent(part.slice(index + 1).trim());
+    } catch {
+      // Malformed %-encoding in one cookie must not take down every session route.
+      return null;
+    }
+    return [part.slice(0, index).trim(), value];
   }).filter(Boolean));
 }
 
