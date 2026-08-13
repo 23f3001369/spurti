@@ -19,6 +19,7 @@ import AchievementView, { isBot, uaFamilyOf, viewerDayHash } from './models/Achi
 import BoardReign from './models/BoardReign.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
+import { weeklySpBreakdown, weeklyTorchHolder } from './services/weeklyPulse.js';
 import Commitment from './models/Commitment.js';
 import { isVibeEligible, buildVibeState, validateBet, settleBetDemo, applySpDelta, courseByKey } from './services/vibe.js';
 import { buildStandupState, placeStandup, settleStandupDemo } from './services/standup.js';
@@ -227,6 +228,19 @@ async function rankFor(email) {
   return { rank: better + 1, cohortSize };
 }
 
+// Weekly Torch holder — read from the CACHED week-total leaderboard snapshot,
+// never from a live SPTransaction aggregation. The 6-hourly sp-refresh cron
+// already computes the week's net SP per student (excluding the +100 `initial`
+// joining grant); the torch is just the top row of that board, so a dashboard
+// page costs one snapshot read instead of a ~92k-txn scan per request.
+async function getWeeklyTorch() {
+  const board = await LeaderboardSnapshot.findOne({ boardKey: 'week:total:all' }).lean();
+  if (!board) return null;
+  const torch = weeklyTorchHolder(board.rows || []);
+  if (!torch) return null;
+  return { ...torch, weekLabel: board.weekLabel };
+}
+
 function excusedPayload(student) {
   return {
     excused: true,
@@ -290,6 +304,7 @@ async function studentPayload(student) {
       eligibleForVibeGoals: isVibeEligible(student)
     },
     transactions,
+    weeklyPulse: weeklySpBreakdown(transactions),
     polls,
     attendance,
     cohort: {
@@ -491,11 +506,39 @@ api.get('/leaderboard/board', async (req, res) => {
   if (!board) return res.json({ window, category, scope: wantCohort ? 'cohort' : 'all', weekLabel: '', builtAt: null, rows: [], me: null });
   const meId = student ? String(student._id) : null;
   const meRow = meId ? board.rows.find((r) => r.studentId === meId) : null;
+  const torch = await getWeeklyTorch();
+  const torchId = torch ? torch.studentId : null;
+  const rows = board.rows.slice(0, 50).map((r) => ({ ...r, isTorchHolder: torchId ? r.studentId === torchId : false }));
   res.json({
     window: board.window, category: board.category, scope: wantCohort ? 'cohort' : 'all',
     weekLabel: board.weekLabel, builtAt: board.builtAt, total: board.rows.length,
-    rows: board.rows.slice(0, 50),
-    me: meRow ? { rank: meRow.rank, sp: meRow.sp } : null
+    rows,
+    me: meRow ? { rank: meRow.rank, sp: meRow.sp, isTorchHolder: torchId ? meRow.studentId === torchId : false } : null
+  });
+});
+
+// Weekly Torch — who's gained the most SP this week. Read from the cached
+// week-total snapshot (see getWeeklyTorch); never leaks the holder's raw email
+// to the caller. `isCurrentUser` is computed server-side from the cookie
+// session — never from a query param — and the client never matches on
+// (collision-prone) masked emails.
+api.get('/torch', async (req, res) => {
+  const torch = await getWeeklyTorch();
+  if (!torch) return res.json({ torch: null });
+  const email = await studentEmailFromRequest(req);
+  const me = email
+    ? await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }, { _id: 1 }).lean()
+    : null;
+  const isCurrentUser = me ? String(me._id) === torch.studentId : false;
+  res.json({
+    windowDays: 7,
+    torch: {
+      studentId: torch.studentId,
+      name: torch.name,
+      netSp: torch.netSp,
+      weekLabel: torch.weekLabel,
+      isCurrentUser
+    }
   });
 });
 

@@ -281,11 +281,18 @@ function SearchModal({ onClose, onStudent }) {
 function StudentView({ profile, onBack }) {
   const [tab, setTab] = useState('bank');
   const [commitPhase, setCommitPhase] = useState('vibe');
+  const [torchData, setTorchData] = useState(undefined);
   const { student } = profile;
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
   // Fetched up here rather than inside the panel because the server decides who
   // gets the tab at all — until it answers `visible`, the tab strip omits it.
   const ach = useAchievements(student.email);
+  useEffect(() => {
+    fetch(`${API}/torch`)
+      .then(res => res.json())
+      .then(data => setTorchData(data))
+      .catch(() => setTorchData(null));
+  }, []);
   return (
     <main className="page compact">
       <header className="topbar">
@@ -297,7 +304,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
+      <StudentPulse profile={profile} torchData={torchData} />
       <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
@@ -797,7 +804,12 @@ function LeaderboardPanel({ student }) {
             <thead><tr><th>Rank</th><th>Name</th><th>Level</th><th>SP</th></tr></thead>
             <tbody>{rows.map(r => (
               <tr key={r.studentId} className={r.studentId === student._id ? 'current-student' : ''}>
-                <td>{r.rank}</td><td>{r.name}</td><td>L{r.level}</td><td>{r.sp}</td>
+                <td>{r.rank}</td>
+                <td>
+                  {r.name}
+                  {r.isTorchHolder && <em className="torch-badge">Torch Holder</em>}
+                </td>
+                <td>L{r.level}</td><td>{r.sp}</td>
               </tr>
             ))}</tbody>
           </table>
@@ -881,8 +893,8 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile }) {
-  const { student, cohort, transactions } = profile;
+function StudentPulse({ profile, torchData }) {
+  const { student, cohort, transactions, weeklyPulse } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
   return (
@@ -902,9 +914,94 @@ function StudentPulse({ profile }) {
           <span>SP trend <em className="expand-hint">expand ↗</em></span>
           <Sparkline points={trend} />
         </button>
+        <WeeklyPulseCard weeklyPulse={weeklyPulse} />
+        <WeeklyTorchCard torchData={torchData} />
       </section>
       {showTraj && <TrajectoryModal student={student} onClose={() => setShowTraj(false)} />}
     </>
+  );
+}
+
+function WeeklyPulseCard({ weeklyPulse }) {
+  if (!weeklyPulse) {
+    return (
+      <div className="pulse-card wide-pulse weekly-pulse-card">
+        <span>Weekly SP Pulse</span>
+        <p className="muted">Loading pulse...</p>
+      </div>
+    );
+  }
+
+  const { netSp, gained, lost, byCategory, topLossReasons } = weeklyPulse;
+
+  return (
+    <div className="pulse-card wide-pulse weekly-pulse-card">
+      <span>Weekly SP Pulse</span>
+      <div className="weekly-pulse-content">
+        {gained === 0 && lost === 0 ? (
+          <p className="pulse-good-news">No SP activity recorded yet this week.</p>
+        ) : lost === 0 || topLossReasons.length === 0 ? (
+          <p className="pulse-good-news">You gained {netSp} SP this week — no losses. Nice run.</p>
+        ) : (
+          <div className="pulse-losses">
+            <p>You lost {lost} SP this week</p>
+            <ul className="loss-list">
+              {topLossReasons.map((item, idx) => (
+                <li key={idx}><strong>-{item.amount}</strong> <em>{item.reason} ({item.sessionLabel})</em></li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div className="compare-list category-breakdown">
+          {Object.entries(byCategory).map(([cat, data]) => (
+            <b key={cat}>{cat}: {data.netSp > 0 ? '+' : ''}{data.netSp} SP</b>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WeeklyTorchCard({ torchData }) {
+  if (torchData === undefined) {
+    return (
+      <div className="pulse-card wide-pulse torch-card">
+        <span>Weekly Torch</span>
+        <p className="muted">Loading torch data...</p>
+      </div>
+    );
+  }
+
+  const torch = torchData?.torch;
+
+  if (!torch) {
+    return (
+      <div className="pulse-card wide-pulse torch-card">
+        <span>Weekly Torch</span>
+        <p className="muted">No one has gained SP yet this week.</p>
+      </div>
+    );
+  }
+
+  const isHolder = torch.isCurrentUser;
+
+  return (
+    <div className={`pulse-card wide-pulse torch-card ${isHolder ? 'torch-holder' : ''}`}>
+      <span>Weekly Torch</span>
+      {isHolder ? (
+        <div className="torch-content">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="torch-icon">
+             <path d="M12 2C8 6 8 10 12 14c4-4 4-8 0-12z" />
+             <path d="M12 14v8" />
+             <path d="M10 22h4" />
+          </svg>
+          <p>You're holding the torch this week! (+{torch.netSp} SP)</p>
+        </div>
+      ) : (
+        <p><strong>{torch.name}</strong> holds the torch this week (+{torch.netSp} SP).</p>
+      )}
+      {torch.weekLabel && <em className="torch-week muted">Week of {torch.weekLabel} · resets Monday</em>}
+    </div>
   );
 }
 

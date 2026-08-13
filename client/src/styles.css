@@ -320,6 +320,42 @@ input {
 .next-list { margin: 0; padding-left: 18px; color: #334155; line-height: 1.6; }
 .empty { color: var(--muted); }
 
+/* --- Weekly SP Pulse & Torch -------------------------------------------- */
+.weekly-pulse-card .pulse-good-news { font-weight: 500; margin-bottom: 12px; }
+.pulse-losses { margin-bottom: 12px; }
+.pulse-losses > p { font-weight: 700; margin-bottom: 6px; }
+.loss-list { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }
+.loss-list li { display: flex; gap: 8px; font-size: 13px; }
+.loss-list strong { color: var(--red); font-size: 13px; }
+.loss-list em { font-style: normal; color: var(--muted); }
+.category-breakdown { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.category-breakdown b { font-weight: 800; }
+
+.torch-holder {
+  background: linear-gradient(135deg, #fdf6ec 0%, #faecd6 100%);
+  border-color: #f6d198;
+  box-shadow: 0 4px 20px rgba(161, 92, 7, 0.15);
+}
+.torch-holder > span { color: var(--amber); }
+.torch-content { display: flex; align-items: center; gap: 8px; }
+.torch-content p { margin: 0; color: var(--amber); font-weight: 600; }
+.torch-icon { color: var(--amber); flex-shrink: 0; }
+.torch-card > p { margin-bottom: 0; }
+.torch-week { display: block; margin-top: 8px; font-size: 12px; }
+.torch-badge {
+  display: inline-block;
+  margin-left: 8px;
+  font-style: normal;
+  background: linear-gradient(135deg, #fcebc5, #f5d078);
+  color: var(--amber);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 850;
+  vertical-align: middle;
+  box-shadow: 0 2px 8px rgba(161, 92, 7, 0.1);
+}
+
 .bank { display: grid; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .bank-controls { display: flex; gap: 10px; align-items: center; }
 .bank-controls label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); font-weight: 700; }
