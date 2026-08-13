@@ -751,7 +751,7 @@ input {
 .post-howto b { font-size: 13px; }
 .post-howto ol { margin: 7px 0 9px; padding-left: 18px; display: grid; gap: 5px; }
 .post-howto li { font-size: 12.5px; line-height: 1.5; color: #475569; }
-.post-howto .tag-links { display: flex; gap: 14px; margin-top: 5px; }
+.post-howto .tag-links { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 5px; }
 
 tr.step-alert { background: #fff1f0; }
 tr.step-alert td { border-color: #f3c9c5; }

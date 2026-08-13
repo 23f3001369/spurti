@@ -1,5 +1,6 @@
 import qrcode from 'qrcode-generator';
 import { VLED_LOGO, VLED_LOGO_RATIO } from './vledLogo.js';
+import { IIT_LOGO, IIT_LOGO_RATIO } from './iitLogo.js';
 
 // Draws the achievement card to a canvas and hands back a PNG.
 //
@@ -22,17 +23,17 @@ const NAVY = '#20323b';
 const MUTED = '#6f8189';
 const FAINT = '#8a999e';
 
-let logoPromise = null;
-function loadLogo() {
-  if (!logoPromise) {
-    logoPromise = new Promise((resolve, reject) => {
+const imgCache = new Map();
+function loadImage(src) {
+  if (!imgCache.has(src)) {
+    imgCache.set(src, new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = reject;
-      img.src = VLED_LOGO;
-    });
+      img.src = src;
+    }));
   }
-  return logoPromise;
+  return imgCache.get(src);
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -102,7 +103,7 @@ function drawQr(ctx, text, x, y, size) {
  * @returns {Promise<string>} PNG data URL
  */
 export async function renderCard(a, s, verifyUrl) {
-  const logo = await loadLogo();
+  const [logo, crest] = await Promise.all([loadImage(VLED_LOGO), loadImage(IIT_LOGO)]);
   const W = EXPORT_W;
   const H = Math.round(W * 1.25);
   const k = W / REF;                       // design px -> render px
@@ -125,9 +126,23 @@ export async function renderCard(a, s, verifyUrl) {
   ctx.fillStyle = ground;
   ctx.fillRect(0, 0, W, H);
 
-  // ---- header band + logo -------------------------------------------------
+  // ---- header band: the two marks that issue this -------------------------
+  // Vicharanashala left, IIT Ropar right, bookending the band the way a
+  // letterhead does rather than sitting as one centred lockup. They are sized
+  // by HEIGHT, not by width: the crest is near square and the Vicharanashala
+  // mark is nearly four times wider than it is tall, so matching their widths
+  // would leave one towering over the other. The crest is set the taller of the
+  // two because a dense circular emblem reads smaller than the box it occupies.
+  // The band is sized off the crest rather than off the old full-width logo. It
+  // comes out shorter than the single-logo header did, and that is deliberate:
+  // two marks sitting side by side need far less vertical room than one mark
+  // stretched the width of the card, and keeping the taller band just left a
+  // gap under them. The body block re-centres in whatever is left, so nothing
+  // below has to be adjusted for it.
   const padX = u(20);
-  const headerH = u(22) + (W - padX * 2) / VLED_LOGO_RATIO + u(26);
+  const crestH = u(76);
+  const markH = u(56);
+  const headerH = u(20) + crestH + u(24);
   const headBg = ctx.createLinearGradient(0, 0, 0, headerH);
   headBg.addColorStop(0, '#fffdf7');
   headBg.addColorStop(1, '#f8f3e8');
@@ -140,8 +155,13 @@ export async function renderCard(a, s, verifyUrl) {
   ctx.lineTo(W, headerH);
   ctx.stroke();
 
-  const logoW = W - padX * 2;
-  ctx.drawImage(logo, padX, u(22), logoW, logoW / VLED_LOGO_RATIO);
+  // Centred on one another rather than sharing a baseline — two marks of
+  // different shapes only look level when their middles line up.
+  const logoMid = u(20) + crestH / 2;
+  const markW = markH * VLED_LOGO_RATIO;
+  const crestW = crestH * IIT_LOGO_RATIO;
+  ctx.drawImage(logo, padX, logoMid - markH / 2, markW, markH);
+  ctx.drawImage(crest, W - padX - crestW, logoMid - crestH / 2, crestW, crestH);
 
   // ---- "Achievement Unlocked" pill, straddling the header rule ------------
   const pillH = u(26);
