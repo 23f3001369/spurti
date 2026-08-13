@@ -22,12 +22,13 @@ function joinParts(parts) {
   return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
 }
 
-function buildNudge(student, { missedCount, noPolls }) {
+function buildNudge(student, { missedLabels, noPolls }) {
   const parts = [];
   let reason = null;
 
-  if (missedCount >= MISSED_SESSIONS_THRESHOLD) {
-    parts.push(`you've missed ${missedCount} sessions this week`);
+  if (missedLabels.length >= MISSED_SESSIONS_THRESHOLD) {
+    const labelSummary = missedLabels.slice(0, 3).join(', ') + (missedLabels.length > 3 ? `, and ${missedLabels.length - 3} more` : '');
+    parts.push(`you've missed ${missedLabels.length} sessions this week (${labelSummary})`);
     reason = reason || 'missed_sessions';
   }
   if (noPolls) {
@@ -78,10 +79,10 @@ export async function detectAtRiskStudents() {
   for (const student of students) {
     const email = student.email.toLowerCase();
     const qualified = qualifiedByEmail[email] || new Set();
-    const missedCount = sessionLabels.filter(label => !qualified.has(label)).length;
+    const missedLabels = sessionLabels.filter(label => !qualified.has(label));
     const noPolls = (pollsAttemptedByEmail[email] || 0) === 0;
 
-    const built = buildNudge(student, { missedCount, noPolls });
+    const built = buildNudge(student, { missedLabels, noPolls });
     if (!built) continue;
 
     const existing = await Nudge.findOne({
