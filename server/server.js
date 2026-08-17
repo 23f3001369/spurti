@@ -159,6 +159,12 @@ const app = express();
 app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
+function evictStaleViewers() {
+  const cutoff = Date.now() - 60_000;
+  for (const [email, data] of liveViewers.entries()) {
+    if (data.lastSeen.getTime() < cutoff) liveViewers.delete(email);
+  }
+}
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
@@ -627,6 +633,8 @@ api.post('/share/track', async (req, res) => {
 });
 
 api.post('/ping', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
   const { email, name, page } = req.body || {};
   const normalized = normalizeEmail(email);
   if (!normalized || !name || !page) return res.status(400).json({ error: 'email, name, page required' });
@@ -639,6 +647,7 @@ api.post('/ping', async (req, res) => {
     if (err?.name !== 'ValidationError') console.error('ping log failed:', err?.message);
   }
   if (page === 'record' || page.startsWith('admin')) {
+    evictStaleViewers();
     liveViewers.set(normalized, { name, page, lastSeen: new Date() });
   }
   res.json({ ok: true });
