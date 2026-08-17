@@ -202,6 +202,12 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       first = mandatory.sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0];
       wStart = utcFromISTDate(date, '09:05');
       wEnd = WINDOW_END_OVERRIDE_IST[date] ? utcFromISTDate(date, WINDOW_END_OVERRIDE_IST[date]) : Math.min(new Date(first.endTime).getTime(), utcFromISTDate(date, '11:00'));
+      // The official window must actually exist: a meeting that ENDED before the
+      // 09:05 window opens (wEnd <= wStart) would otherwise yield a NEGATIVE
+      // winMin in the scoring loop, which turns the 10/5/3/0 attendance tier into
+      // +10 for EVERY attendee (negative/negative percentage). Skip the session
+      // entirely — nobody can be present in a window that never opened.
+      if (wEnd <= wStart) continue;
     }
     sessions.push({ date, uuid: first._id, topic: first.topic, wStart, wEnd, label: dayLabel(first.topic) });
   }
@@ -250,6 +256,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
 
   for (const s of sessions) {
     const winMin = Math.round((s.wEnd - s.wStart) / 60000);
+    if (winMin <= 0) continue; // defensive: a degenerate/negative window must never score attendance
     // attendance via zoom_attendance mirror (firstJoin/lastLeave), clipped to window
     const segByEmail = new Map();
     for (const p of await sak.collection('zoom_attendance').find({ meetingUuid: s.uuid }).toArray()) {
