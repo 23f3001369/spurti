@@ -457,8 +457,11 @@ api.get('/search', async (req, res) => {
 });
 
 api.post('/confirm', async (req, res) => {
+  const sessionEmail = await studentEmailFromRequest(req);
+  if (!sessionEmail) return res.status(401).json({ error: 'Not authenticated' });
   if (!ALLOW_STUDENT_SEARCH) return res.status(403).json({ error: 'Student search is disabled. Please login from Samagama to view your Spurti Points.' });
   const { studentId, email } = req.body || {};
+  if (!mongoose.Types.ObjectId.isValid(studentId)) return res.status(400).json({ error: 'Invalid student ID' });
   const typed = normalizeEmail(email);
   const student = await Student.findById(studentId).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
