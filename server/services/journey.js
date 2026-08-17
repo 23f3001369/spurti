@@ -171,22 +171,41 @@ function phaseGoal({ targetDate, current = null, target = null, unit = '%', pend
 // Upsert the plan dates — but LOCK a phase once its target is set and still in the
 // future (a commitment device: no moving the goalpost). A phase only becomes settable
 // again when its date has passed (missed). Only fields present in `incoming` are touched.
-export async function saveJourneyPlan(email, incoming = {}) {
+// The same realistic [minDate, maxDate] bounds the client picker enforces are checked
+// server-side (the client <input min/max> is cosmetic — never trust it).
+export async function saveJourneyPlan(student, incoming = {}) {
+  const email = student.email;
   const existing = await JourneyPlan.findOne({ email }).lean();
   const today = startOfToday();
+  const endDate = student.internshipEndDate || null;
   // Can't set a standup goal once the 3600-min target is already met (achieved).
-  let standupDone = false;
+  let standupRemaining = null;
   if (incoming.standupBy) {
     const att = await AttendanceRecord.find({ email }).lean();
-    standupDone = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0) >= STANDUP_MINUTES_TARGET;
+    const minutes = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0);
+    standupRemaining = Math.max(0, STANDUP_MINUTES_TARGET - minutes);
   }
   const set = {};
   for (const f of ['standupBy', 'vibeBy', 'spaBy', 'projectBy']) {
     const cur = existing?.[f] ? new Date(existing[f]) : null;
     const locked = cur && cur.getTime() >= today.getTime();   // active future target → locked
     if (locked) continue;
-    if (f === 'standupBy' && standupDone) continue;           // already achieved → not settable
-    if (Object.prototype.hasOwnProperty.call(incoming, f)) set[f] = incoming[f] ? new Date(incoming[f]) : null;
+    if (f === 'standupBy' && standupRemaining === 0) continue;   // already achieved → not settable
+    if (!Object.prototype.hasOwnProperty.call(incoming, f)) continue;
+
+    const raw = incoming[f];
+    if (!raw) { set[f] = null; continue; }   // explicit clear
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) throw new Error(`${f} must be a valid date.`);
+
+    const key = f === 'standupBy' ? 'standup' : f === 'vibeBy' ? 'vibe' : f === 'spaBy' ? 'spa' : 'project';
+    const goal = key === 'standup' ? { remaining: standupRemaining } : {};
+    const { minDate, maxDate } = goalBounds(key, goal, endDate);
+    const ds = ymd(d);
+    if (ds < minDate) throw new Error(`${f} must be on or after ${minDate}.`);
+    if (ds > maxDate) throw new Error(`${f} must be on or before ${maxDate}.`);
+
+    set[f] = d;
   }
   if (Object.keys(set).length) await JourneyPlan.updateOne({ email }, { $set: set }, { upsert: true });
 }
