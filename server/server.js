@@ -1184,6 +1184,11 @@ if (fs.existsSync(clientDist)) {
 }
 
 mongoose.connect(MONGO_URI).then(() => {
+  app.use((err, _req, res, _next) => {
+    console.error(err.stack);
+    res.status(500).json({ error: 'Internal server error' });
+  });
+mongoose.connect(MONGO_URI).then(() => {
   app.listen(PORT, () => console.log(`Spurti app running at http://localhost:${PORT}/`));
 }).catch((error) => {
   console.error(error);
