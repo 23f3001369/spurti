@@ -488,26 +488,39 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
   for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
   console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
-  // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is
-  // rubric-generated (initial/attendance/poll only; no admin/discretionary txns
-  // exist). Any student NOT in the new ledger must be cleared so the leaderboard
-  // shows ONLY the new ledger with no stale ghosts. This covers: future-start
-  // attendees (zeroOut), rejected applicants, duplicate person-records now
-  // consolidated under a canonical email, and no-longer-qualifying students.
+  // RECONCILE: the new ledger is the COMPLETE source of truth for rubric SP
+  // (initial/attendance/poll/spa/query). Any student NOT in the new ledger must
+  // be cleared so the leaderboard shows ONLY the new ledger with no stale ghosts.
+  // This covers: future-start attendees (zeroOut), rejected applicants, duplicate
+  // person-records now consolidated under a canonical email, and no-longer-
+  // qualifying students. CRITICAL: the PRESERVED categories ('manual'/'peer_faq')
+  // are admin-granted and NOT recomputable, so they survive even for students
+  // outside the new ledger — we delete only non-preserved rows and set totalSp to
+  // the student's surviving preserved balance (0 if they have none).
   const keep = new Set(finalBal.keys());
   const staleSet = new Set();
   for (const s of await Students.find({ totalSp: { $ne: 0 } }, { projection: { email: 1 } }).toArray()) if (!keep.has(s.email)) staleSet.add(s.email);
   for (const e of await Tx.distinct('email')) if (!keep.has(e)) staleSet.add(e);
   const staleEmails = [...staleSet];
-  let zdel = 0; for (let i = 0; i < staleEmails.length; i += 500) { const r = await Tx.deleteMany({ email: { $in: staleEmails.slice(i, i + 500) } }); zdel += r.deletedCount; }
+  let zdel = 0;
+  for (let i = 0; i < staleEmails.length; i += 500) {
+    const chunk = staleEmails.slice(i, i + 500);
+    const r = await Tx.deleteMany({ email: { $in: chunk }, category: { $nin: PRESERVED_CATS } });
+    zdel += r.deletedCount;
+  }
+  // Preserved balance per stale student = sum of their surviving manual/peer_faq deltas.
+  const stalePreserved = new Map();
+  for (const t of await Tx.find({ email: { $in: staleEmails }, category: { $in: PRESERVED_CATS } }, { projection: { email: 1, appliedDelta: 1 } }).toArray()) {
+    stalePreserved.set(t.email, (stalePreserved.get(t.email) || 0) + (Number(t.appliedDelta) || 0));
+  }
   const zeroOutSet = new Set(zeroOut);
   const staleBulk = staleEmails.map((email) => {
-    if (zeroOutSet.has(email)) {
-      return { updateOne: { filter: { email }, update: { $set: { totalSp: 0, status: 'yet to onboard' } } } };
-    }
-    return { updateOne: { filter: { email }, update: { $set: { totalSp: 0 } } } };
+    const totalSp = stalePreserved.get(email) || 0;
+    const update = { totalSp };
+    if (zeroOutSet.has(email)) update.status = 'yet to onboard';
+    return { updateOne: { filter: { email }, update: { $set: update } } };
   });
   for (let i = 0; i < staleBulk.length; i += 1000) await Students.bulkWrite(staleBulk.slice(i, i + 1000), { ordered: false });
-  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start set to 'yet to onboard'; ghost txns deleted ${zdel}, totalSp=0)`);
+  console.log(`RECONCILED -> ${staleEmails.length} students not in new ledger cleared (incl ${zeroOut.length} future-start set to 'yet to onboard'; non-preserved txns deleted ${zdel}, ${stalePreserved.size} kept preserved SP)`);
   await conn.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });
