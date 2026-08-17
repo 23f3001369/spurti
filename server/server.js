@@ -1160,7 +1160,8 @@ if (fs.existsSync(clientDist)) {
       // A crawler only ever hits this route, which is what the bot flag is for.
       logAchievementView(req, req.params.code, found);
       res.status(found ? 200 : 404).type('html').send(html);
-    } catch {
+    } catch (err) {
+      console.error('[verify-page]', err);
       res.sendFile(path.join(clientDist, 'index.html'));
     }
   });
