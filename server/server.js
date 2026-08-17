@@ -813,6 +813,59 @@ api.get('/admin/active', adminGuard, (_req, res) => {
   res.json(viewers);
 });
 
+// Admin integrity audit: verifies every student's totalSp equals the sum of their
+// appliedDelta transactions, and flags negative-SP students + deltaMode issues.
+api.get('/admin/integrity-check', adminGuard, async (_req, res) => {
+  const issues = await SPTransaction.aggregate([
+    { $group: { _id: '$email', computedBalance: { $sum: '$appliedDelta' }, transactions: { $sum: 1 } } },
+    {
+      $lookup: {
+        from: 'students',
+        localField: '_id',
+        foreignField: 'email',
+        pipeline: [{ $project: { email: 1, totalSp: 1, name: 1 } }],
+        as: 'student'
+      }
+    },
+    { $unwind: { path: '$student', preserveNullAndEmpty: false } },
+    { $match: { $expr: { $ne: ['$computedBalance', '$student.totalSp'] } } },
+    {
+      $project: {
+        _id: 0,
+        email: '$_id',
+        name: '$student.name',
+        storedTotalSp: '$student.totalSp',
+        computedBalance: 1,
+        discrepancy: { $subtract: ['$student.totalSp', '$computedBalance'] },
+        transactions: 1
+      }
+    },
+    { $sort: { discrepancy: -1 } }
+  ]);
+
+  const negativeSp = await Student.find({ totalSp: { $lt: 0 } })
+    .select('email name totalSp')
+    .lean();
+
+  const deltaModeIssues = await SPTransaction.countDocuments({ deltaMode: 'percent' });
+
+  res.json({
+    clean: issues.length === 0 && negativeSp.length === 0,
+    checkedAt: new Date().toISOString(),
+    summary: {
+      totalIssues: issues.length,
+      studentsWithNegativeSp: negativeSp.length,
+      deltaModeIssues,
+      totalStudentsChecked: await Student.countDocuments({ status: 'active' })
+    },
+    balanceDiscrepancies: issues,
+    negativeSpStudents: negativeSp,
+    deltaModeFixNeeded: deltaModeIssues > 0
+      ? `Run: db.sptransactions.updateMany({deltaMode:'percent'},{$set:{deltaMode:'percentage'}})`
+      : null
+  });
+});
+
 api.get('/admin/analytics', adminGuard, async (_req, res) => {
   const now = new Date();
   const lastHour = new Date(now.getTime() - 60 * 60 * 1000);
