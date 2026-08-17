@@ -816,27 +816,34 @@ api.get('/admin/active', adminGuard, (_req, res) => {
 // Admin integrity audit: verifies every student's totalSp equals the sum of their
 // appliedDelta transactions, and flags negative-SP students + deltaMode issues.
 api.get('/admin/integrity-check', adminGuard, async (_req, res) => {
-  const issues = await SPTransaction.aggregate([
-    { $group: { _id: '$email', computedBalance: { $sum: '$appliedDelta' }, transactions: { $sum: 1 } } },
+  const issues = await Student.aggregate([
+    { $match: { status: { $ne: 'excused' } } },
     {
       $lookup: {
-        from: 'students',
-        localField: '_id',
-        foreignField: 'email',
-        pipeline: [{ $project: { email: 1, totalSp: 1, name: 1 } }],
-        as: 'student'
+        from: 'sptransactions',
+        let: { studentEmail: '$email' },
+        pipeline: [
+          { $match: { $expr: { $eq: ['$email', '$$studentEmail'] } } },
+          { $group: { _id: null, computedBalance: { $sum: '$appliedDelta' }, transactions: { $sum: 1 } } }
+        ],
+        as: 'txInfo'
       }
     },
-    { $unwind: { path: '$student', preserveNullAndEmpty: false } },
-    { $match: { $expr: { $ne: ['$computedBalance', '$student.totalSp'] } } },
+    {
+      $addFields: {
+        computedBalance: { $ifNull: [{ $arrayElemAt: ['$txInfo.computedBalance', 0] }, 0] },
+        transactions: { $ifNull: [{ $arrayElemAt: ['$txInfo.transactions', 0] }, 0] }
+      }
+    },
+    { $match: { $expr: { $ne: ['$computedBalance', '$totalSp'] } } },
     {
       $project: {
         _id: 0,
-        email: '$_id',
-        name: '$student.name',
-        storedTotalSp: '$student.totalSp',
+        email: 1,
+        name: 1,
+        storedTotalSp: '$totalSp',
         computedBalance: 1,
-        discrepancy: { $subtract: ['$student.totalSp', '$computedBalance'] },
+        discrepancy: { $subtract: ['$totalSp', '$computedBalance'] },
         transactions: 1
       }
     },
