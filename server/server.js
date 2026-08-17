@@ -150,6 +150,13 @@ function surveyPublic(cfg) {
 }
 
 const app = express();
+// One proxy hop (nginx) sits in front, so without this every request looks like
+// it came from 127.0.0.1 and `req.ip` is the proxy rather than the visitor. The
+// only thing that reads it is the verify-page viewer hash, which was therefore
+// counting browser families instead of people. If the proxy ever stops setting
+// X-Forwarded-For this falls back to the socket address, i.e. to today's
+// behaviour — it cannot make things worse.
+app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
@@ -536,6 +543,12 @@ function logAchievementView(req, code, result) {
   if (!VIEW_LOG_ON) return;
   const verifyId = String(code || '').trim().toUpperCase();
   const ua = req.get('user-agent') || '';
+  // Read synchronously, with everything else off the request. `req.ip` is a
+  // getter over the socket's remote address, and the socket is usually gone by
+  // the time the await below resolves — reading it in there returned undefined
+  // for 403 of the first 437 human views, so most of them recorded no hash at
+  // all. Nothing off `req` may be read after the first await.
+  const ip = req.ip;
   let ref = '';
   try { ref = req.get('referer') ? new URL(req.get('referer')).host : ''; } catch { ref = ''; }
   // The category is re-read here rather than added to verifyAchievement's
@@ -553,7 +566,7 @@ function logAchievementView(req, code, result) {
       ref,
       uaFamily: uaFamilyOf(ua),
       bot: isBot(ua),
-      viewerDay: viewerDayHash(req.ip, ua)
+      viewerDay: viewerDayHash(ip, ua)
     });
   })().catch(() => { /* never let logging break a credential page */ });
 }
