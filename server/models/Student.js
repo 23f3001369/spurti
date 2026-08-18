@@ -9,7 +9,7 @@ const studentSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'excused'], default: 'active', index: true },
   excusedAt: { type: Date, default: null },
   excusedReason: { type: String, default: '' },
-  totalSp: { type: Number, default: 0, index: true },
+  totalSp: { type: Number, default: 100, index: true },
   // Spurti Levels & Trophy Leagues — derived views over SP (see services/levels.js).
   highestSpEver: { type: Number, default: 100, index: true },
   level: { type: Number, default: 1 },
