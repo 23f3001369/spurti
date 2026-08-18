@@ -454,7 +454,7 @@ api.get('/search', async (req, res) => {
       { email: { $regex: escaped, $options: 'i' } },
       { alternateEmail: { $regex: escaped, $options: 'i' } }
     ]
-  }).sort({ name: 1 }).limit(12).lean();
+  }).select('-_id').sort({ name: 1 }).limit(12).lean();
 
   res.json({ exact: false, matches: matches.map(publicStudent) });
 });
@@ -588,11 +588,6 @@ api.post('/share/card', async (req, res) => {
 
   const url = `${publicBaseUrl(req)}/spurti/cards/${ach.verifyId}.png`;
   const file = path.join(CARD_DIR, `${ach.verifyId}.png`);
-  // Write once. Identity here is only the email in the request — the same weak
-  // model the rest of the app uses — so allowing overwrites would let anyone
-  // replace the picture that a student's public verify link previews.
-  if (fs.existsSync(file)) return res.json({ url, stored: false });
-
   const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return res.status(400).json({ error: 'A PNG data URL is required' });
   const buf = Buffer.from(m[1], 'base64');
