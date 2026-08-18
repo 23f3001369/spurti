@@ -164,6 +164,7 @@ const liveViewers = new Map();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(mongoSanitize());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
