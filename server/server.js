@@ -3,6 +3,8 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
 import mongoSanitize from 'express-mongo-sanitize';
 import { fileURLToPath } from 'url';
 
@@ -28,6 +30,8 @@ import { buildSpaState } from './services/spa.js';
 import { buildTrajectoryState } from './services/trajectory.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function isValidISO8601(s) { return typeof s === 'string' && !Number.isNaN(Date.parse(s)); }
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
 // Saved achievement cards live outside the repo tree's tracked files; they are
