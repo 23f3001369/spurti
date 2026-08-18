@@ -708,7 +708,11 @@ function registerSurveyRoutes(base, cfg) {
   // Authoritative confirmation: the Google Form's Apps Script onFormSubmit
   // trigger POSTs { email, secret } here. Secret-authenticated, not session.
   api.post(`${base}/webhook`, async (req, res) => {
-    if (!cfg.webhookSecret || String(req.body?.secret || '') !== cfg.webhookSecret) {
+    const secret = String(req.body?.secret || '');
+    // Timing-safe comparison — pad both to the same length before comparing
+    const a = String(cfg.webhookSecret).padEnd(secret.length, '\0');
+    const b = secret.padEnd(cfg.webhookSecret.length, '\0');
+    if (!cfg.webhookSecret || !crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))) {
       return res.status(403).json({ ok: false, error: 'forbidden' });
     }
     const student = await markSurveyComplete(req.body?.email, cfg);
@@ -731,7 +735,8 @@ api.get('/admin/stats', adminGuard, async (_req, res) => {
   res.json({ yetToOnboard, excusedStudents, activeStudents, sessions, transactions: txns });
 });
 api.get('/admin/students-by-status', adminGuard, async (req, res) => {
-  const status = String(req.query.status || 'yet to onboard');
+  const validStatuses = ['active', 'excused'];
+  const status = validStatuses.includes(String(req.query.status || '')) ? String(req.query.status || '') : 'active';
   const limit = Math.min(200, Math.max(1, Number(req.query.limit || 200)));
   const students = await Student.find({ status }).sort({ name: 1 }).limit(limit).lean();
   res.json(students.map(s => ({
