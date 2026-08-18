@@ -429,9 +429,13 @@ api.get('/journey/state', async (req, res) => {
 
 api.put('/journey/plan', async (req, res) => {
   const student = await vibeStudent(req);
-  if (!student) return res.status(404).json({ error: 'Student not found' });   // My Journey goals are universal (Phase 1)
-  await saveJourneyPlan(student.email, req.body || {});
-  res.json(await buildJourneyState(student));
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const { startDate, endDate } = req.body || {};
+  // Validate date fields are valid ISO 8601 when present
+  if (startDate && !isValidISO8601(startDate)) return res.status(400).json({ error: 'Invalid start date format' });
+  if (endDate && !isValidISO8601(endDate)) return res.status(400).json({ error: 'Invalid end date format' });
+  await saveJourneyPlan(student.email, req.body);
+  res.json(await studentPayload(student));
 });
 
 api.get('/search', async (req, res) => {
