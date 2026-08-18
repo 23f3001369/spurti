@@ -30,6 +30,11 @@ import { buildTrajectoryState } from './services/trajectory.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const clientDist = path.join(rootDir, 'client', 'dist');
+let cachedIndexHtml = null;
+function getIndexHtml() {
+  if (!cachedIndexHtml) cachedIndexHtml = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8');
+  return cachedIndexHtml;
+}
 // Saved achievement cards live outside the repo tree's tracked files; they are
 // regenerable, so losing them only costs the next share's og:image.
 const CARD_DIR = process.env.CARD_DIR || path.join(rootDir, 'server', 'data', 'cards');
@@ -161,7 +166,14 @@ app.set('trust proxy', 1);
 const api = express.Router();
 const liveViewers = new Map();
 
-app.use(cors());
+app.use(cors({
+  origin: (origin, cb) => {
+    const allowed = [/samagama\.in$/, /localhost(:\d+)?$/];
+    if (!origin || allowed.some(re => re.test(origin))) return cb(null, true);
+    cb(null, false);
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(mongoSanitize());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: 'Too many requests, please try again later.' }));
@@ -315,10 +327,12 @@ async function studentPayload(student) {
 }
 
 function isAdmin(req) {
-  if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false; // fail closed when admin creds aren't configured
-  const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-  const tokenOk = crypto.timingSafeEqual(String(req.headers['x-admin-token'] || '').padEnd(32, '\0'), String(ADMIN_TOKEN).padEnd(32, '\0'));
-  return emailOk && tokenOk;
+  try {
+    if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false;
+    const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
+    const tokenOk = crypto.timingSafeEqual(String(req.headers['x-admin-token'] || '').padEnd(32, '\0'), String(ADMIN_TOKEN).padEnd(32, '\0'));
+    return emailOk && tokenOk;
+  } catch { return false; }
 }
 
 function adminGuard(req, res, next) {
@@ -346,7 +360,7 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
-  const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
+  const email = await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
 }
@@ -1126,7 +1140,7 @@ async function verifyPageHtml(req, code) {
   // against /spurti/verify/<code>/ and 404. This page is two levels deep, so the
   // asset paths have to be absolute.
   const mount = req.path.startsWith('/spurti') ? '/spurti' : '';
-  const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8')
+  const html = getIndexHtml()
     .replace(/(src|href)="\.\/assets\//g, `$1="${mount}/assets/`);
   const result = await verifyAchievement(code, Student);
   const base = publicBaseUrl(req);

@@ -224,23 +224,28 @@ function SearchModal({ onClose, onStudent }) {
 
   const search = async () => {
     if (query.trim().length < 2) return setMessage('Type at least 2 characters.');
-    const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
-    const data = await res.json();
-    if (data.excused) return onStudent(data);
-    if (data.exact) return onStudent(data.profile);
-    setMatches(data.matches || []);
-    setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    try {
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(query.trim())}`);
+      if (!res.ok) return setMessage('Search failed. Please try again.');
+      const data = await res.json();
+      if (data.excused) return onStudent(data);
+      if (data.exact) return onStudent(data.profile);
+      setMatches(data.matches || []);
+      setMessage(data.matches?.length ? 'Select your record and confirm your email.' : 'No matching student found.');
+    } catch { setMessage('Network error. Please try again.'); }
   };
 
   const confirm = async () => {
-    const res = await fetch(`${API}/confirm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
-    });
-    const data = await res.json();
-    if (!res.ok) return setMessage(data.error || 'Email did not match.');
-    onStudent(data);
+    try {
+      const res = await fetch(`${API}/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: selected?._id, email: confirmEmail })
+      });
+      const data = await res.json();
+      if (!res.ok) return setMessage(data.error || 'Email did not match.');
+      onStudent(data);
+    } catch { setMessage('Network error. Please try again.'); }
   };
 
   return (
@@ -328,6 +333,7 @@ function SpaModule({ student }) {
     let live = true;
     (async () => {
       const r = await fetch(`${API}/spa/state`);
+      if (!live) return;
       setData(await r.json());
     })();
     return () => { live = false; };
@@ -833,7 +839,9 @@ function LeaderboardPanel({ student }) {
 function TrajectoryModal({ student, onClose }) {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch(`${API}/trajectory/state`).then(r => r.json()).then(setData);
+    let live = true;
+    fetch(`${API}/trajectory/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
   }, [student.email]);
 
   const series = data ? [
@@ -1152,11 +1160,11 @@ function MyJourney({ student, goToCommitment, canCommit = false }) {
   const [showTraj, setShowTraj] = useState(false);
   const [err, setErr] = useState(null);
 
-  const load = async () => {
-    const r = await fetch(`${API}/journey/state`);
-    setData(await r.json());
-  };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/journey/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
+  }, []);
 
   if (!data) return <section className="panel">Loading your journey…</section>;
   if (!data.eligible) return <section className="panel empty">My Journey isn’t available for your cohort yet.</section>;
@@ -1293,9 +1301,11 @@ function VibeGoals({ student }) {
     setData(await r.json());
   };
   useEffect(() => {
-    load();
+    let live = true;
+    fetch(`${API}/vibe/state`).then(r => r.json()).then(d => { if (live) setData(d); });
     const d = new Date(); d.setDate(d.getDate() + 2);
     setForm(f => ({ ...f, deadline: d.toISOString().slice(0, 10) }));
+    return () => { live = false; };
   }, []);
 
   if (!data) return <section className="panel">Loading ViBe Goals…</section>;
@@ -1463,7 +1473,11 @@ function StandupGoals({ student }) {
     const r = await fetch(`${API}/standup/state`);
     setData(await r.json());
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let live = true;
+    fetch(`${API}/standup/state`).then(r => r.json()).then(d => { if (live) setData(d); });
+    return () => { live = false; };
+  }, []);
 
   if (!data) return <section className="panel">Loading standups…</section>;
   if (!data.eligible) return <section className="panel empty">Standup commitments aren’t available for your cohort yet.</section>;
@@ -1578,24 +1592,19 @@ function AdminView({ admin, auth, onBack }) {
     return () => clearInterval(id);
   }, [admin]);
   const loadLeaderboard = async (limit = leaderLimit) => {
-    const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers });
-    setLeaderboard(await res.json());
+    try { const res = await fetch(`${API}/admin/leaderboard?limit=${limit}`, { headers }); if (res.ok) setLeaderboard(await res.json()); } catch {}
   };
   const loadAttendance = async () => {
-    const res = await fetch(`${API}/admin/attendance`, { headers });
-    setAttendance(await res.json());
+    try { const res = await fetch(`${API}/admin/attendance`, { headers }); if (res.ok) setAttendance(await res.json()); } catch {}
   };
   const loadStudent = async (id) => {
-    const res = await fetch(`${API}/admin/student/${id}`, { headers });
-    setStudentProfile(await res.json());
+    try { const res = await fetch(`${API}/admin/student/${id}`, { headers }); if (res.ok) setStudentProfile(await res.json()); } catch {}
   };
   const loadActive = async () => {
-    const res = await fetch(`${API}/admin/active`, { headers });
-    setActive(await res.json());
+    try { const res = await fetch(`${API}/admin/active`, { headers }); if (res.ok) setActive(await res.json()); } catch {}
   };
   const loadAnalytics = async () => {
-    const res = await fetch(`${API}/admin/analytics`, { headers });
-    setAnalytics(await res.json());
+    try { const res = await fetch(`${API}/admin/analytics`, { headers }); if (res.ok) setAnalytics(await res.json()); } catch {}
   };
 
   useEffect(() => { loadLeaderboard(50); fetchStats(); }, []);
@@ -2071,4 +2080,19 @@ function SurveyModal({ survey, student, onDone, statusPath = '/survey/status', c
 }
 
 
-createRoot(document.getElementById('root')).render(<App />);
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <h2>Something went wrong.</h2>
+        <p className="muted">Please refresh the page.</p>
+        <button className="primary" onClick={() => this.setState({ hasError: false })}>Try again</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
