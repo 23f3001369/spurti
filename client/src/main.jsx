@@ -1333,8 +1333,6 @@ function VibeGoals({ student }) {
     { email, course: cur.key, goalPct: g, stake: s, multiplier: m, deadline: form.deadline }); if (j) setData(j); };
   const saveEdit = async () => { const j = await post(`${API}/vibe/bet/${data.active._id}`,
     { email, goalPct: g, stake: s, multiplier: m }, 'PUT'); if (j) { setEditing(false); setData(j); } };
-  const settle = async (result) => { const j = await post(`${API}/vibe/bet/${data.active._id}/settle`,
-    { email, result }); if (j) { setEditing(false); setData(j); } };
 
   const showForm = cur && (!data.active || editing);
 
@@ -1436,8 +1434,6 @@ function VibeGoals({ student }) {
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
                 {!editing && <button className="secondary" onClick={() => { setForm({ goalPct: data.active.goalPct, stake: data.active.stake, multiplier: data.active.multiplier, deadline: form.deadline }); setEditing(true); }}>Edit commitment</button>}
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
@@ -1493,7 +1489,6 @@ function StandupGoals({ student }) {
     const j = await r.json(); if (!r.ok) { setErr(j.error); return null; } setErr(null); return j;
   };
   const place = async () => { const j = await post(`${API}/standup/commit`, { email, tierKey, multiplier }); if (j) setData(j); };
-  const settle = async (result) => { const j = await post(`${API}/standup/commit/${data.active._id}/settle`, { email, result }); if (j) setData(j); };
 
   return (
     <div className="vg">
@@ -1544,8 +1539,6 @@ function StandupGoals({ student }) {
             <div className="side">
               <div><span className="win">Hit +{data.active.potentialWin}</span> / <span className="lose">Miss −{data.active.potentialLoss}</span></div>
               <div className="vg-betbtns">
-                <button className="secondary" onClick={() => settle('won')}>Demo: Hit</button>
-                <button className="secondary" onClick={() => settle('lost')}>Demo: Miss</button>
               </div>
             </div>
           </div>
