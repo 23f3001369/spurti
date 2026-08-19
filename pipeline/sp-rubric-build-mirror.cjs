@@ -222,7 +222,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const top = sp.topPoints || (sp.students || []).reduce((mx, x) => Math.max(mx, x.pointsEarned || 0), 0);
     for (const x of sp.students || []) {
       const e = String(x.email || '').toLowerCase().trim(); if (!e) continue;
-      const pct = top ? Math.round((x.pointsEarned || 0) / top * 1000) / 10 : 0;
+      const pct = top ? Math.round((x.pointsEarned || 0) / top * 100) : 0;
       const d = tier(pct);
       // Short bank message: conveys correctness-based + relative-to-day-top in one line.
       touch(e).rows.push({ date: sp.date, order: 2, cat: 'poll', delta: d,
@@ -427,7 +427,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
-    for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Only add if no rubric row already exists for this date+cat (prevents double-counting).
+    const existingKeys = new Set(rows.map(r => r.date + '|' + r.cat));
+    for (const p of (preservedByCanon.get(cand) || [])) {
+      const key = p.date + '|' + p.cat;
+      if (existingKeys.has(key)) continue;          // skip — rubric row already counts this date
+      existingKeys.add(key);
+      rows.push(p);
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);

@@ -94,8 +94,9 @@ export function validateBet({ state, course, goalPct, stake, multiplier, deadlin
 
   const floorPct = c ? floorPctFor(c) : 0;
   const remaining = state.current ? state.current.remaining : 0;
-  if (goalPct <= floorPct) errs.push(`Goal must beat the weekly floor (${floorPct}%).`);
-  if (goalPct > remaining) errs.push(`Goal exceeds your remaining ${remaining}%.`);
+  if (isNaN(goalPct) || typeof goalPct !== 'number') errs.push('Invalid goal percentage.');
+  else if (goalPct <= floorPct) errs.push(`Goal must beat the weekly floor (${floorPct}%).`);
+  if (!isNaN(goalPct) && goalPct > remaining) errs.push(`Goal exceeds your remaining ${remaining}%.`);
 
   if (deadline !== undefined) {
     const days = daysFromToday(deadline);

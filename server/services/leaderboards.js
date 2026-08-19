@@ -238,7 +238,8 @@ export async function computeAndStoreLeaderboards() {
     const already = await Achievement.find(
       { achId: { $regex: `^rank:[^:]+:week:${wk}:` } }, { achId: 1 }
     ).lean();
-    const settled = new Set(already.map((a) => a.achId));
+    const validAchId = (id) => /^rank:(attendance|poll|spa|query|total):week?/.test(id);
+    const settled = new Set(already.map((a) => a.achId).filter(validAchId));
 
     const period = `Week of ${prevLabel}`;
     const awardable = [['total', pTotal], ...CATS.map((c) => [c, pCat(c)])]

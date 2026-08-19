@@ -25,22 +25,22 @@ ts(){ date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
 echo "######## $(ts) sp-pipeline start ########"
 
-echo "=== $(ts) STAGE 1/3: #zoomupdate (ingest + sakshi mirror) ==="
+echo "=== $(ts) STAGE 1/6: #zoomupdate (ingest + sakshi mirror) ==="
 $NODE $HEAP zoom-update.js
 rc=$?; echo "--- $(ts) stage1 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: #zoomupdate failed (rc=$rc)"; exit 1; }
 
-echo "=== $(ts) STAGE 2/3: sp-rubric-build-mirror APPLY=1 ==="
+echo "=== $(ts) STAGE 2/6: sp-rubric-build-mirror APPLY=1 ==="
 APPLY=1 OUT_DIR=/var/samagama/server/sp-runs $NODE $HEAP pipeline/sp-rubric-build-mirror.cjs
 rc=$?; echo "--- $(ts) stage2 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: sp-rubric-build-mirror failed (rc=$rc)"; exit 1; }
 
-echo "=== $(ts) STAGE 3/3: sync-spurti-from-sakshi (-> chatengine) ==="
+echo "=== $(ts) STAGE 3/6: sync-spurti-from-sakshi (-> chatengine) ==="
 $NODE sync-spurti-from-sakshi.js
 rc=$?; echo "--- $(ts) stage3 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: spurti mirror failed (rc=$rc)"; exit 1; }
 
-echo "=== $(ts) STAGE 4/5: sync-attendance-records (-> sakshi_spurti) ==="
+echo "=== $(ts) STAGE 4/6: sync-attendance-records (-> sakshi_spurti) ==="
 $NODE sync-attendance-records.cjs
 rc=$?; echo "--- $(ts) stage4 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: sync-attendance-records failed (rc=$rc)"; exit 1; }
@@ -51,7 +51,7 @@ rc=$?; echo "--- $(ts) stage5 exit=$rc ---"
 [ $rc -eq 0 ] || { echo "ABORT: sync-poll-records failed (rc=$rc)"; exit 1; }
 
 echo "=== $(ts) STAGE 6/6: zoom-fetch-transcripts (AI summaries -> zoom_data.summaries) ==="
-$NODE /home/samagama/samagama/server/zoom-fetch-transcripts.js
+$NODE $HEAP pipeline/zoom-fetch-transcripts.js
 rc=$?; echo "--- $(ts) stage6 exit=$rc ---"
 # Non-fatal: summary processing lag is normal; today's meeting retried tomorrow
 [ $rc -eq 0 ] || echo "WARN: zoom-fetch-transcripts failed (rc=$rc) — will retry on next run"

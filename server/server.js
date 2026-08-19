@@ -260,14 +260,15 @@ function excusedPayload(student) {
 async function studentPayload(student) {
   const email = student.email;
   const activeFilter = { status: { $ne: 'excused' } };
-  const [transactions, polls, attendance, rankInfo, leaderboard, allStudents] = await Promise.all([
+  const [transactions, polls, attendance, rankInfo, , allStudents] = await Promise.all([
     SPTransaction.find({ email }).sort({ dateTime: 1, createdAt: 1 }).lean(),
     PollRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     AttendanceRecord.find({ email }).sort({ sessionLabel: 1 }).lean(),
     rankFor(email),
-    Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).limit(50).lean(),
+    // leaderboard derived from allStudents below (no separate query needed)
     Student.find(activeFilter).sort({ totalSp: -1, name: 1 }).lean()
   ]);
+  const leaderboard = allStudents.slice(0, 50);
   const allSp = allStudents.map(s => Number(s.totalSp || 0));
   const averageSp = allSp.length ? Math.round(allSp.reduce((sum, value) => sum + value, 0) / allSp.length) : 0;
   const top10Cutoff = allStudents[9]?.totalSp || null;
@@ -542,7 +543,7 @@ api.get('/achievements', async (req, res) => {
   const access = achievementsAccess(student);
   // Nothing is computed or persisted for a student who cannot see the tab —
   // the milestone write in buildAchievementState only happens once it is on.
-  if (!access.visible) return res.json({ ...access, groups: [], locked: [], counts: {} });
+  if (!access.visible) return res.json({ ...access, initialized: false, groups: [], locked: [], counts: {} });
   res.json({
     ...access,
     student: { name: student.name, email: student.email, totalSp: student.totalSp, level: levelFor(Math.max(Number(student.highestSpEver) || 0, Number(student.totalSp) || 0)) },

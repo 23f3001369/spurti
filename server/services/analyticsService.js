@@ -28,7 +28,8 @@ function compute_cohort_counts(students) {
   const counts = {};
   for (const s of students) {
     if (!s.internshipStartDate) continue;
-    const dateKey = s.internshipStartDate.toISOString().split('T')[0];
+    const d = new Date(s.internshipStartDate);
+    const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     counts[dateKey] = (counts[dateKey] || 0) + 1;
   }
   return counts;

@@ -586,7 +586,9 @@ function ShareModal({ item, me, onClose }) {
   const [png, setPng] = useState(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const verifyUrl = `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`;
+  const verifyUrl = item.verifyId
+  ? `${window.location.origin}${APP_BASE}/verify/${item.verifyId}`
+  : '';
   const [caption, setCaption] = useState('');
   // Posting a card is a four-step job on LinkedIn and every step is easy to skip
   // — most of all uploading the image, without which the post is a bare link.
@@ -594,29 +596,23 @@ function ShareModal({ item, me, onClose }) {
   const [readSteps, setReadSteps] = useState(false);
 
   useEffect(() => {
+    let live = true;
     import('./shareCard.js').then(m => {
       const text = m.shareCaption(item, verifyUrl);
       setCaption(text);
       setGenerated(text);
-    });
-  }, [item.achId]);
-
-  useEffect(() => {
-    let live = true;
-    import('./shareCard.js')
-      .then(m => m.renderCard(item, me, verifyUrl))
-      .then(url => {
-        if (!live) return;
-        setPng(url);
-        // Hand the card to the server once, so the verify link carries it as a
-        // preview image. Best-effort: a failure here only costs the preview.
-        fetch(`${API}/share/card`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ achId: item.achId, dataUrl: url })
-        }).catch(() => {});
-      })
-      .catch(() => { if (live) setError('Could not draw the card. Try again.'); });
+      return m.renderCard(item, me, verifyUrl);
+    }).then(url => {
+      if (!live) return;
+      setPng(url);
+      // Hand the card to the server once, so the verify link carries it as a
+      // preview image. Best-effort: a failure here only costs the preview.
+      fetch(`${API}/share/card`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ achId: item.achId, dataUrl: url })
+      }).catch(() => {});
+    }).catch(() => { if (live) setError('Could not draw the card. Try again.'); });
     return () => { live = false; };
   }, [item.achId]);
 
