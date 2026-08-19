@@ -330,7 +330,9 @@ function isAdmin(req) {
   try {
     if (!ADMIN_EMAIL || !ADMIN_TOKEN) return false;
     const emailOk = normalizeEmail(req.headers['x-admin-email']) === ADMIN_EMAIL;
-    const tokenOk = crypto.timingSafeEqual(String(req.headers['x-admin-token'] || '').padEnd(32, '\0'), String(ADMIN_TOKEN).padEnd(32, '\0'));
+    const a = String(req.headers['x-admin-token'] || '').padEnd(32, '\0');
+    const b = String(ADMIN_TOKEN).padEnd(32, '\0');
+    const tokenOk = crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
     return emailOk && tokenOk;
   } catch { return false; }
 }
@@ -466,8 +468,11 @@ api.get('/search', async (req, res) => {
     if (student) return res.json({ exact: true, profile: await studentPayload(student) });
   }
 
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matches = await Student.find({
+const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Metacharacters are escaped above, so the $regex matches literally —
+// no ReDoS risk even with 100-char input. Combined with the q.length > 100
+// guard at line 462, this provides defense-in-depth protection.
+const matches = await Student.find({
     $or: [
       { name: { $regex: escaped, $options: 'i' } },
       { email: { $regex: escaped, $options: 'i' } },
