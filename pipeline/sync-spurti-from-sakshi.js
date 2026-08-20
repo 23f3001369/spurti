@@ -73,7 +73,7 @@ const normSp = (n) => { const v = parseInt(n, 10); return isNaN(v) ? null : (v >
   for (let i = 0; i < rows.length; i += 2000) await spledgers.insertMany(rows.slice(i, i + 2000), { ordered: false });
   console.log(`inserted ${rows.length} rows from her ledger`);
   let upd = 0;
-  for (const [email, sum] of totals) { const r = await User.updateOne({ email }, { $set: { spPoints: sum, spPointsUpdated: new Date() } }); if (r.matchedCount) upd++; }
+  for (const [email, sum] of totals) { const r = await mongoose.connection.db.collection('users').updateOne({ email }, { $set: { spPoints: sum, spPointsUpdated: new Date() } }); if (r.matchedCount) upd++; }
   console.log(`recomputed spPoints for ${upd} matched users (of ${totals.size})`);
   await mongoose.disconnect(); await sak.close();
 })().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

@@ -82,15 +82,15 @@ const CUTOFF = process.env.SPANDAN_CUTOFF || '2026-07-16';
     const day = tx.dateTime ? asDay(tx.dateTime) : '';
     const spd = spByEmailDate.get(email + '|' + day);
     let attemptedQuestions, totalQuestions;
-if (spd) {
+    let fallM = null;
+    if (spd) {
       attemptedQuestions = spd.attempted; totalQuestions = spd.total; viaSpandan++;
     } else {
       const m = POLL_RE.exec(tx.reason || '');
-      let attemptedQuestions = 0, totalQuestions = 0;
       if (m) { attemptedQuestions = Number(m[1]); totalQuestions = Number(m[2]); }
       else {
         // Fallback: try to extract "N of M" from reason string for any format variant.
-        const fallM = tx.reason && tx.reason.match(/(\d+)\s+of\s+(\d+)/i);
+        fallM = tx.reason && tx.reason.match(/(\d+)\s+of\s+(\d+)/i);
         if (fallM) { attemptedQuestions = Number(fallM[1]); totalQuestions = Number(fallM[2]); }
       }
       if (m || fallM) { viaReason++; }

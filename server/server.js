@@ -1,9 +1,11 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import mongoose from 'mongoose';
 import path from 'path';
 import fs from 'fs';
 import mongoSanitize from 'express-mongo-sanitize';
+import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'url';
 
 import { ALLOW_STUDENT_SEARCH, MONGO_URI, PORT, SAMAGAMA_AUTH_URL } from './config.js';
@@ -199,6 +201,12 @@ function publicStudent(student) {
     status: student.status || 'active',
     totalSp: student.totalSp
   };
+}
+
+function isValidISO8601(value) {
+  if (typeof value !== 'string') return false;
+  const t = Date.parse(value);
+  return !Number.isNaN(t);
 }
 
 function parseCookies(header = '') {
@@ -896,7 +904,7 @@ api.get('/admin/analytics', adminGuard, async (_req, res) => {
     };
   });
 
-  const categoryTotals = ['initial', 'attendance', 'poll', 'manual'].map(category => {
+  const categoryTotals = ['initial', 'attendance', 'poll', 'spa', 'query', 'manual'].map(category => {
     const rows = activeTransactions.filter(t => t.category === category);
     return {
       category,

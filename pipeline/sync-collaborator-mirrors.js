@@ -115,6 +115,8 @@ function deriveStatus(u, fr) {
     return;
   }
 
+  const currentEmails = new Set(rows.map(r => r.email));
+
   for (const dbName of TARGETS) {
     const conn = await MongoClient.connect(`${BASE}/${dbName}?authSource=admin`);
     const coll = conn.db().collection('candidates');
@@ -123,7 +125,9 @@ function deriveStatus(u, fr) {
       updateOne: { filter: { email: r.email }, update: { $set: r }, upsert: true },
     }));
     const res = await coll.bulkWrite(ops, { ordered: false });
-    console.log(`${dbName}.candidates  upserted=${res.upsertedCount} modified=${res.modifiedCount} matched=${res.matchedCount}`);
+    // Remove candidates for students no longer in the source (soft-deleted, rejected, etc.)
+    const stale = await coll.deleteMany({ email: { $nin: [...currentEmails] } });
+    console.log(`${dbName}.candidates  upserted=${res.upsertedCount} modified=${res.modifiedCount} matched=${res.matchedCount} staleRemoved=${stale.deletedCount}`);
     await conn.close();
   }
 

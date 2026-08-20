@@ -494,7 +494,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // SPA summary for the web-app SPA tab (display only; SP itself is in the ledger above).
   const Spa = sak.collection('spaprogresses');
   const spaOps = spaSummary.map((s) => ({ updateOne: { filter: { email: s.email },
-    update: { $set: { ...s, activity: 'Activity 1: Linear Algebra', updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
+    update: { $set: { ...s, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, upsert: true } }));
   for (let i = 0; i < spaOps.length; i += 1000) await Spa.bulkWrite(spaOps.slice(i, i + 1000), { ordered: false });
   console.log(`SPA -> spaprogresses upserted ${spaOps.length}`);
   // RECONCILE: the new ledger is the COMPLETE source of truth — all current SP is
