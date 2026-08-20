@@ -203,7 +203,7 @@ export async function computeAndStoreLeaderboards() {
   // Persist: upsert each board; drop any stale group boards no longer present.
   const keys = new Set(boards.map((b) => b.boardKey));
   await Promise.all(boards.map((b) => LeaderboardSnapshot.updateOne({ boardKey: b.boardKey }, { $set: b }, { upsert: true })));
-  await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
+  if (keys.size) await LeaderboardSnapshot.deleteMany({ boardKey: { $nin: [...keys] } });
 
   // Award permanent podium achievements — 1st, 2nd and 3rd on each GLOBAL board.
   //
