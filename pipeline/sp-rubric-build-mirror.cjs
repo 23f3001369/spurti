@@ -318,10 +318,23 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
         { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
     if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
   }
-  for (const a of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
-        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
-    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  // Audit failures, EXCLUDING the collusion-pattern cleanup. That sweep de-endorsed
+  // ~28k endorsements in bulk off a multi-signal detector, and its own rejectNote
+  // says the teacher's +10% reward was revoked and "no other penalty" — so it is
+  // not adjudicated misconduct and must not trigger the -20%. Same guard in spirit
+  // as the fraud netting above, which already drops operator test rows. A student
+  // who ALSO has a genuine audit failure still gets flagged, on that row's merit.
+  const auditRows = await sak.collection('act_spa_transactions').find(
+        { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } },
+        { projection: { email: 1, endorsementId: 1 } }).toArray();
+  const auditEids = [...new Set(auditRows.map((r) => r.endorsementId).filter(Boolean))];
+  const cleanupEids = new Set((await sak.collection('act_spa_endorsements').find(
+        { _id: { $in: auditEids }, rejectNote: /collusion-pattern cleanup/i },
+        { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
+  for (const a of auditRows) {
+    if (a.endorsementId && cleanupEids.has(String(a.endorsementId))) continue;
+    const c = canonOf(String(a.email || '').toLowerCase().trim());
+    spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
   }
 
   // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
