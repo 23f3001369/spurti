@@ -430,9 +430,14 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       // on every sp-refresh (4x/day), so a TODAY stamp re-dated one old decision every
       // run — in a newest-first SP Bank that reads as a fresh punishment every morning.
       const penDate = (flags.fraud ? flags.fraudDate : flags.auditDate) || TODAY;
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
+      // Base is what the student had EARNED BY the offence date, not their whole
+      // accumulated total. Charging a July offence against August earnings meant the
+      // penalty kept growing after the fact, and a back-dated row computed from future
+      // rows made the running balance dip by more than was ever there at that point.
+      const penBase = rows.reduce((a, r) => a + (r.date <= penDate ? r.delta : 0), 0);
+      spaPenalty = Math.round(penBase * penRate);
       if (spaPenalty > 0) rows.push({ date: penDate, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of SP earned from attendance, polls and SPA -> -${spaPenalty} SP.` });
+        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of the ${penBase} SP earned up to ${ddmon(penDate)} -> -${spaPenalty} SP.` });
     }
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
