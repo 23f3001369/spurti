@@ -300,6 +300,7 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
+      <Announcements student={student} />
       <StudentPulse
         profile={profile}
         newAchievements={unseenAchievements}
@@ -908,6 +909,61 @@ function TrajectoryModal({ student, onClose }) {
         )}
       </div>
     </div>
+  );
+}
+
+// Programme announcements with read-tracking. Unread notices render as a
+// highlighted card with a "Got it" button — that ack is the read signal the
+// team tracks. Read ones fold away behind a toggle so the page stays clean,
+// and the whole section disappears when there are no notices at all.
+function Announcements({ student }) {
+  const [data, setData] = useState(null);
+  const [showRead, setShowRead] = useState(false);
+  const load = async () => {
+    try {
+      const r = await fetch(`${API}/announcements?email=${encodeURIComponent(student.email)}`);
+      if (r.ok) setData(await r.json());
+    } catch { /* a failed notice fetch must never break the dashboard */ }
+  };
+  useEffect(() => { load(); }, [student.email]);
+  if (!data || !data.announcements?.length) return null;
+
+  const unread = data.announcements.filter(a => !a.acked);
+  const read = data.announcements.filter(a => a.acked);
+  const ack = async id => {
+    await fetch(`${API}/announcements/${id}/ack`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: student.email })
+    });
+    load();
+  };
+  const fmt = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+  return (
+    <section className="panel announcements">
+      <div className="ann-head">
+        <h2>📣 Announcements{unread.length > 0 && <em className="ann-badge">{unread.length} new</em>}</h2>
+        {read.length > 0 && (
+          <button className="ann-toggle" onClick={() => setShowRead(s => !s)}>
+            {showRead ? 'Hide read' : `Read earlier (${read.length})`}
+          </button>
+        )}
+      </div>
+      {unread.map(a => (
+        <article key={a.id} className="ann-item ann-new">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)}</time></header>
+          <p>{a.body}</p>
+          <button className="primary ann-ack" onClick={() => ack(a.id)}>Got it ✓</button>
+        </article>
+      ))}
+      {unread.length === 0 && <p className="muted ann-caughtup">You’re all caught up.</p>}
+      {showRead && read.map(a => (
+        <article key={a.id} className="ann-item ann-done">
+          <header><strong>{a.title}</strong><time>{fmt(a.postedAt)} · read ✓</time></header>
+          <p>{a.body}</p>
+        </article>
+      ))}
+    </section>
   );
 }
 

@@ -829,3 +829,28 @@ tr.step-alert td { border-color: #f3c9c5; }
 /* The "artwork may change" note sits under the main blurb — quieter than it,
    so it reads as a footnote rather than a second announcement. */
 .ach-head .ach-note { font-size: 12px; margin-top: -2px; opacity: .8; }
+
+/* ── Announcements (programme notices with read-tracking) ─────────────────── */
+.announcements { margin-bottom: 16px; padding: 16px 18px; }
+.ann-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.ann-head h2 { margin: 0; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.ann-badge {
+  font-style: normal; font-size: 12px; font-weight: 700; color: #fff;
+  background: var(--amber); border-radius: 999px; padding: 2px 9px;
+}
+.ann-toggle {
+  background: none; border: none; color: var(--primary);
+  font-size: 13px; font-weight: 600; padding: 4px 6px;
+}
+.ann-toggle:hover { text-decoration: underline; }
+.ann-item { border-radius: 12px; padding: 12px 14px; margin-top: 8px; }
+.ann-item header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.ann-item header strong { font-size: 15px; }
+.ann-item header time { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.ann-item p { margin: 6px 0 0; font-size: 14px; line-height: 1.55; white-space: pre-line; }
+.ann-new { background: #fff8ec; border: 1px solid #f2d9a4; }
+.ann-new + .ann-new { margin-top: 10px; }
+.ann-ack { margin-top: 10px; padding: 7px 16px; font-size: 13px; }
+.ann-done { background: #f6f8fb; border: 1px solid var(--line); }
+.ann-done p, .ann-done header strong { color: var(--muted); }
+.ann-caughtup { margin: 2px 0 0; font-size: 13px; }
