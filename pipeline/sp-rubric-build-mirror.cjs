@@ -313,10 +313,17 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   }
   // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
   // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  // The /testing/i guard applies to the PENALTY side ONLY — a reversal always counts.
+  // A reversal's reason routinely quotes the penalty it undoes (e.g. '...was explicitly
+  // logged with reason "Testing purpose"'), so filtering both sides dropped the +credit
+  // and kept the -debit, flagging a net-zero account as fraud. That hit exactly one
+  // person: an auditor whose penalty had already been investigated and reversed.
   for (const f of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
-        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
-    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+        { $match: { $or: [
+            { transactionType: 'teacher_fraud_penalty', reason: { $not: /testing/i } },
+            { transactionType: 'fraud_penalty_reversal' }] } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' }, when: { $max: '$createdAt' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true, fraudDate: dstr(f.when) || null }); }
   }
   // Audit failures, EXCLUDING the collusion-pattern cleanup. That sweep de-endorsed
   // ~28k endorsements in bulk off a multi-signal detector, and its own rejectNote
@@ -326,7 +333,7 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   // who ALSO has a genuine audit failure still gets flagged, on that row's merit.
   const auditRows = await sak.collection('act_spa_transactions').find(
         { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } },
-        { projection: { email: 1, endorsementId: 1 } }).toArray();
+        { projection: { email: 1, endorsementId: 1, createdAt: 1 } }).toArray();
   const auditEids = [...new Set(auditRows.map((r) => r.endorsementId).filter(Boolean))];
   const cleanupEids = new Set((await sak.collection('act_spa_endorsements').find(
         { _id: { $in: auditEids }, rejectNote: /collusion-pattern cleanup/i },
@@ -334,7 +341,9 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   for (const a of auditRows) {
     if (a.endorsementId && cleanupEids.has(String(a.endorsementId))) continue;
     const c = canonOf(String(a.email || '').toLowerCase().trim());
-    spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+    const prev = spaFlag.get(c) || {};
+    const d = dstr(a.createdAt); // date of the offence, for dating the penalty row
+    spaFlag.set(c, { ...prev, auditFail: true, auditDate: (d && (!prev.auditDate || d > prev.auditDate)) ? d : prev.auditDate });
   }
 
   // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
@@ -417,9 +426,13 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
     let spaPenalty = 0;
     if (penRate > 0) {
+      // Date the penalty to the offence, NOT to TODAY. The ledger is wiped and rebuilt
+      // on every sp-refresh (4x/day), so a TODAY stamp re-dated one old decision every
+      // run — in a newest-first SP Bank that reads as a fresh punishment every morning.
+      const penDate = (flags.fraud ? flags.fraudDate : flags.auditDate) || TODAY;
       spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+      if (spaPenalty > 0) rows.push({ date: penDate, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of SP earned from attendance, polls and SPA -> -${spaPenalty} SP.` });
     }
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
