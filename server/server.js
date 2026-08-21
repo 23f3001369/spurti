@@ -514,11 +514,20 @@ api.get('/leaderboard/board', async (req, res) => {
 // ---- Announcements (programme notices with read-tracking) --------------------
 // Students see active notices on their dashboard; "Got it" writes one ack row
 // per student per notice, which is what the team reads to know who has read what.
+// A notice is visible to a student when its audience is empty (broadcast) or
+// names either of their addresses. Centralized so list and ack can never disagree.
+function announcementVisibleTo(ann, student) {
+  if (!ann.audience || ann.audience.length === 0) return true;
+  const mine = new Set([normalizeEmail(student.email), normalizeEmail(student.alternateEmail || '')]);
+  return ann.audience.some(a => mine.has(normalizeEmail(a)));
+}
+
 api.get('/announcements', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const email = normalizeEmail(student.email);
-  const list = await Announcement.find({ active: true }).sort({ postedAt: -1 }).lean();
+  const list = (await Announcement.find({ active: true }).sort({ postedAt: -1 }).lean())
+    .filter(a => announcementVisibleTo(a, student));
   const acked = new Set((await AnnouncementAck.find({ email }).select('announcementId').lean())
     .map(a => String(a.announcementId)));
   res.json({
@@ -534,7 +543,7 @@ api.post('/announcements/:id/ack', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
   const ann = await Announcement.findOne({ _id: req.params.id, active: true }).lean();
-  if (!ann) return res.status(404).json({ error: 'Announcement not found' });
+  if (!ann || !announcementVisibleTo(ann, student)) return res.status(404).json({ error: 'Announcement not found' });
   // Upsert so a double-tap (or a stale open tab) can never duplicate or error.
   await AnnouncementAck.updateOne(
     { announcementId: ann._id, email: normalizeEmail(student.email) },
@@ -548,8 +557,11 @@ api.post('/admin/announcements', adminGuard, async (req, res) => {
   const title = String(req.body?.title || '').trim();
   const body = String(req.body?.body || '').trim();
   if (!title || !body) return res.status(400).json({ error: 'title and body are required' });
-  const ann = await Announcement.create({ title, body });
-  res.json({ ok: true, id: String(ann._id) });
+  // Optional targeting: audience = array of emails. Empty/omitted = broadcast.
+  const audience = Array.isArray(req.body?.audience)
+    ? [...new Set(req.body.audience.map(normalizeEmail).filter(Boolean))] : [];
+  const ann = await Announcement.create({ title, body, audience });
+  res.json({ ok: true, id: String(ann._id), audienceSize: audience.length || 'broadcast' });
 });
 
 api.post('/admin/announcements/:id', adminGuard, async (req, res) => {
@@ -568,11 +580,16 @@ api.get('/admin/announcements', adminGuard, async (_req, res) => {
   const readsBy = new Map(ackCounts.map(c => [String(c._id), c.reads]));
   res.json({
     activeStudents,
-    announcements: list.map(a => ({
-      id: String(a._id), title: a.title, postedAt: a.postedAt, active: a.active,
-      reads: readsBy.get(String(a._id)) || 0,
-      readPct: activeStudents ? Math.round((readsBy.get(String(a._id)) || 0) / activeStudents * 100) : 0
-    }))
+    announcements: list.map(a => {
+      // Read-rate denominator: the targeted audience when one is set, else all actives.
+      const denom = (a.audience && a.audience.length) ? a.audience.length : activeStudents;
+      const reads = readsBy.get(String(a._id)) || 0;
+      return {
+        id: String(a._id), title: a.title, postedAt: a.postedAt, active: a.active,
+        audienceSize: (a.audience && a.audience.length) || 'broadcast',
+        reads, readPct: denom ? Math.round(reads / denom * 100) : 0
+      };
+    })
   });
 });
 
