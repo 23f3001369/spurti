@@ -285,7 +285,10 @@ function StudentView({ profile, onBack }) {
   const goToCommitment = ph => { setCommitPhase(ph); setTab('vibe'); };
   // Fetched up here rather than inside the panel because the server decides who
   // gets the tab at all — until it answers `visible`, the tab strip omits it.
-  const ach = useAchievements(student.email);
+  const [ach, markAchievementsSeen] = useAchievements(student.email);
+  const unseenAchievements = ach?.counts?.unseen || 0;
+  // Opening the tab is what counts as seeing them, wherever it is opened from.
+  const selectTab = key => { setTab(key); if (key === 'achievements') markAchievementsSeen(); };
   return (
     <main className="page compact">
       <header className="topbar">
@@ -297,12 +300,17 @@ function StudentView({ profile, onBack }) {
         <div className="score-card"><span>SP</span><strong>{student.totalSp}</strong><em>Rank {student.rank} of {student.cohortSize}</em></div>
       </header>
       <LevelStatus student={student} />
-      <StudentPulse profile={profile} />
-      <Tabs tab={tab} setTab={setTab} tabs={[['bank','SP Bank'],
+      <StudentPulse
+        profile={profile}
+        newAchievements={unseenAchievements}
+        canShareAchievements={!!ach?.sharing}
+        onOpenAchievements={() => selectTab('achievements')}
+      />
+      <Tabs tab={tab} setTab={selectTab} tabs={[['bank','SP Bank'],
         ['journey','My Journey'],
         ...(student.eligibleForVibeGoals ? [['vibe','Commitments']] : []),
         ['spa','SPA Points'],
-        ...(ach?.visible ? [['achievements','Achievements']] : []),
+        ...(ach?.visible ? [['achievements','Achievements', unseenAchievements]] : []),
         ['leaderboard','Leaderboard'],
         ['faq','FAQ']]} />
       {tab === 'bank' && <SpBank transactions={profile.transactions} />}
@@ -448,7 +456,18 @@ function useAchievements(email) {
       .catch(() => { if (live) setData({ visible: false, groups: [], locked: [], counts: {} }); });
     return () => { live = false; };
   }, [email]);
-  return data;
+  // Clearing the badge is optimistic: the student HAS looked, so it should go
+  // the moment they click rather than after a round trip. If the POST fails the
+  // count simply comes back on the next load — nothing is lost either way.
+  const markSeen = () => {
+    setData(d => (d?.counts?.unseen ? { ...d, counts: { ...d.counts, unseen: 0 } } : d));
+    fetch(`${API}/achievements/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    }).catch(() => {});
+  };
+  return [data, markSeen];
 }
 
 function AchievementsPanel({ student, data }) {
@@ -892,12 +911,29 @@ function TrajectoryModal({ student, onClose }) {
   );
 }
 
-function StudentPulse({ profile }) {
+function StudentPulse({ profile, newAchievements = 0, canShareAchievements = false, onOpenAchievements }) {
   const { student, cohort, transactions } = profile;
   const [showTraj, setShowTraj] = useState(false);
   const trend = transactions.map(tx => ({ label: tx.sessionLabel || 'Start', value: tx.balanceAfter }));
+  const many = newAchievements > 1;
   return (
     <>
+      {/* Milestones are settled on read, so a card can come into existence during
+          the very page load the student is looking at. Nothing else on the page
+          would tell them: the tab strip sits lower and reads identically whether
+          or not something new is waiting. */}
+      {newAchievements > 0 && onOpenAchievements && (
+        <button className="ach-nudge" onClick={onOpenAchievements}>
+          <span className="ach-nudge-icon" aria-hidden="true">🎖️</span>
+          <span className="ach-nudge-text">
+            <strong>{newAchievements} new achievement{many ? 's' : ''}</strong>
+            <em>{canShareAchievements
+              ? `See ${many ? 'them' : 'it'} and share ${many ? 'them' : 'it'}`
+              : `See ${many ? 'them' : 'it'} in your Achievements tab`}</em>
+          </span>
+          <span className="ach-nudge-go" aria-hidden="true">→</span>
+        </button>
+      )}
       <section className="pulse-grid">
         <div className="pulse-card progress-card">
           <span>Standing</span>
@@ -979,8 +1015,15 @@ function FaqTab() {
   );
 }
 
+// A tab entry is [key, label] or [key, label, badge]; the badge is only drawn
+// when it is a positive number, so existing callers are untouched.
 function Tabs({ tab, setTab, tabs }) {
-  return <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{label}</button>)}</nav>;
+  return <nav className="tabs">{tabs.map(([key, label, badge]) => (
+    <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>
+      {label}
+      {badge > 0 && <span className="tab-badge" aria-label={`${badge} new`}>{badge}</span>}
+    </button>
+  ))}</nav>;
 }
 
 function SpBank({ transactions }) {
