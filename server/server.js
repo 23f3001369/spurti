@@ -17,6 +17,8 @@ import Achievement from './models/Achievement.js';
 import ShareEvent from './models/ShareEvent.js';
 import AchievementView, { isBot, uaFamilyOf, viewerDayHash } from './models/AchievementView.js';
 import BoardReign from './models/BoardReign.js';
+import Announcement from './models/Announcement.js';
+import AnnouncementAck from './models/AnnouncementAck.js';
 import { buildAchievementState, verifyAchievement } from './services/achievements.js';
 import { leagueBand, levelFor, legendBadge, leaderboardGroup, groupLabel } from './services/levels.js';
 import Commitment from './models/Commitment.js';
@@ -509,6 +511,71 @@ api.get('/leaderboard/board', async (req, res) => {
 // A student's achievements, grouped one tile per board (plus milestones and the
 // nearest locked one). Podium places are awarded by the leaderboard build;
 // milestones are settled and persisted here on read.
+// ---- Announcements (programme notices with read-tracking) --------------------
+// Students see active notices on their dashboard; "Got it" writes one ack row
+// per student per notice, which is what the team reads to know who has read what.
+api.get('/announcements', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const email = normalizeEmail(student.email);
+  const list = await Announcement.find({ active: true }).sort({ postedAt: -1 }).lean();
+  const acked = new Set((await AnnouncementAck.find({ email }).select('announcementId').lean())
+    .map(a => String(a.announcementId)));
+  res.json({
+    announcements: list.map(a => ({
+      id: String(a._id), title: a.title, body: a.body, postedAt: a.postedAt,
+      acked: acked.has(String(a._id))
+    })),
+    unread: list.filter(a => !acked.has(String(a._id))).length
+  });
+});
+
+api.post('/announcements/:id/ack', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const ann = await Announcement.findOne({ _id: req.params.id, active: true }).lean();
+  if (!ann) return res.status(404).json({ error: 'Announcement not found' });
+  // Upsert so a double-tap (or a stale open tab) can never duplicate or error.
+  await AnnouncementAck.updateOne(
+    { announcementId: ann._id, email: normalizeEmail(student.email) },
+    { $setOnInsert: { ackedAt: new Date() } },
+    { upsert: true });
+  res.json({ ok: true });
+});
+
+// Admin: post a notice / toggle one / read the read-rates.
+api.post('/admin/announcements', adminGuard, async (req, res) => {
+  const title = String(req.body?.title || '').trim();
+  const body = String(req.body?.body || '').trim();
+  if (!title || !body) return res.status(400).json({ error: 'title and body are required' });
+  const ann = await Announcement.create({ title, body });
+  res.json({ ok: true, id: String(ann._id) });
+});
+
+api.post('/admin/announcements/:id', adminGuard, async (req, res) => {
+  const ann = await Announcement.findByIdAndUpdate(req.params.id,
+    { $set: { active: !!req.body?.active } }, { new: true }).lean();
+  if (!ann) return res.status(404).json({ error: 'Announcement not found' });
+  res.json({ ok: true, active: ann.active });
+});
+
+api.get('/admin/announcements', adminGuard, async (_req, res) => {
+  const [list, activeStudents, ackCounts] = await Promise.all([
+    Announcement.find({}).sort({ postedAt: -1 }).lean(),
+    Student.countDocuments({ status: 'active' }),
+    AnnouncementAck.aggregate([{ $group: { _id: '$announcementId', reads: { $sum: 1 } } }])
+  ]);
+  const readsBy = new Map(ackCounts.map(c => [String(c._id), c.reads]));
+  res.json({
+    activeStudents,
+    announcements: list.map(a => ({
+      id: String(a._id), title: a.title, postedAt: a.postedAt, active: a.active,
+      reads: readsBy.get(String(a._id)) || 0,
+      readPct: activeStudents ? Math.round((readsBy.get(String(a._id)) || 0) / activeStudents * 100) : 0
+    }))
+  });
+});
+
 api.get('/achievements', async (req, res) => {
   const student = await vibeStudent(req);
   if (!student) return res.status(404).json({ error: 'Student not found' });
