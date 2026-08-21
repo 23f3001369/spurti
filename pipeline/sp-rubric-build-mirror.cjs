@@ -123,6 +123,13 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 // Answering only — asking a question earns nothing.
 const QUERY_UNIT = 5, QUERY_CAP = 200;   // +5 SP / distinct query, cap 200 → max 40 queries
 const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
+// Penalty for admin-disapproved answers, FORWARD-ONLY from the announcement date:
+// verdicts dated before QUERY_PEN_START earn nothing but cost nothing (the rule was
+// not announced when they landed). Gate on the VERDICT date (peer.review.at), not the
+// answer date, so the unreviewed backlog is covered once admins reach it.
+const QUERY_PEN_START = '2026-08-21';
+const QUERY_PEN = { rejected: 10, marked_unworthy: 5 };
+const QUERY_PEN_CAP = 200;               // penalties stop accruing at -200 per student
 
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
@@ -356,11 +363,26 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
   }
   const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  const queryPenByCanon = new Map(); // canon -> [{date, action}] penalizable verdicts (on/after QUERY_PEN_START)
   for (const q of await sak.collection('act_query_reviews').find(
         { 'peer.submittedAnswerHistory.0': { $exists: true } },
-        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1 } }).toArray()) {
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1, 'peer.review.at': 1 } }).toArray()) {
     const askerId = String(q.userId);
-    if (QUERY_BAD_ACTIONS.includes(q.peer?.review?.action)) continue; // admin-flagged bad answer earns nothing
+    const action = q.peer?.review?.action;
+    if (QUERY_BAD_ACTIONS.includes(action)) { // admin-flagged bad answer earns nothing
+      const penDate = dstr(q.peer?.review?.at);
+      if (penDate && penDate >= QUERY_PEN_START) {
+        const seen = new Set();
+        for (let uid of (q.peer.submittedAnswerHistory || [])) {
+          uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+          const e = uidToEmail.get(uid); if (!e) continue;
+          const c = canonOf(e);
+          let arr = queryPenByCanon.get(c); if (!arr) { arr = []; queryPenByCanon.set(c, arr); }
+          arr.push({ date: penDate, action });
+        }
+      }
+      continue;
+    }
     const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
     const seen = new Set();
     for (let uid of (q.peer.submittedAnswerHistory || [])) {
@@ -445,20 +467,51 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
+      // ANTI-REFARM: every answer disapproved on/after QUERY_PEN_START permanently
+      // consumes its QUERY_UNIT of the lifetime cap. Without this, a rejection frees
+      // cap room (the answer leaves the good pool) and a maxed-out farmer could cycle
+      // +200 / -200(once) / +200 forever at zero marginal cost.
+      const qCapEff = Math.max(0, QUERY_CAP - (queryPenByCanon.get(cand) || []).length * QUERY_UNIT);
       let qUsed = 0;
       for (const d of [...qByDay.keys()].sort()) {
-        if (qUsed >= QUERY_CAP) break;
+        if (qUsed >= qCapEff) break;
         const n = qByDay.get(d);
         let delta = n * QUERY_UNIT;
-        if (qUsed + delta > QUERY_CAP) delta = QUERY_CAP - qUsed;
+        if (qUsed + delta > qCapEff) delta = qCapEff - qUsed;
         qUsed += delta;
-        const capNote = qUsed >= QUERY_CAP ? ` (query SP capped at ${QUERY_CAP})` : '';
+        const capNote = qUsed >= qCapEff ? ` (query SP capped at ${qCapEff})` : '';
         rows.push({ date: d, order: 4, cat: 'query', delta,
           reason: `Query answering (${ddmon(d)}): ${n} peer quer${n === 1 ? 'y' : 'ies'} answered -> +${delta} SP${capNote}.` });
       }
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Query-answer penalties (rule announced 21 Aug 2026, forward-only): one 'query'
+    // row per verdict day, dated to the VERDICT (stable across rebuilds, like the SPA
+    // penalty). Capped at QUERY_PEN_CAP per student and clamped so the penalty can
+    // never drive the student's total balance below zero.
+    const qPens = queryPenByCanon.get(cand);
+    if (qPens && qPens.length) {
+      let penBudget = QUERY_PEN_CAP, pensUsed = 0;
+      const penByDay = new Map(); // date -> { rejected: n, marked_unworthy: n }
+      for (const p of qPens) { const o = penByDay.get(p.date) || { rejected: 0, marked_unworthy: 0 }; o[p.action]++; penByDay.set(p.date, o); }
+      for (const d of [...penByDay.keys()].sort()) {
+        if (penBudget <= 0) break;
+        const o = penByDay.get(d);
+        // Clamp to SP actually held by the verdict date (same lesson as the SPA
+        // penalty): the running balance must never dip below zero at this row.
+        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - pensUsed;
+        let pen = o.rejected * QUERY_PEN.rejected + o.marked_unworthy * QUERY_PEN.marked_unworthy;
+        pen = Math.min(pen, penBudget, Math.max(0, heldByD));
+        if (pen <= 0) continue;
+        penBudget -= pen; pensUsed += pen;
+        const parts = [];
+        if (o.rejected) parts.push(`${o.rejected} rejected (-${QUERY_PEN.rejected} each)`);
+        if (o.marked_unworthy) parts.push(`${o.marked_unworthy} marked unworthy (-${QUERY_PEN.marked_unworthy} each)`);
+        rows.push({ date: d, order: 6, cat: 'query', delta: -pen,
+          reason: `Query answering (${ddmon(d)}): admin review — ${parts.join(' + ')} -> -${pen} SP.` });
+      }
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
