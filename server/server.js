@@ -590,6 +590,17 @@ api.get('/achievements', async (req, res) => {
   });
 });
 
+// Marks the tab as read. Deliberately NOT folded into GET /achievements: that
+// fires on every dashboard load, whatever tab is showing, so letting it stamp
+// would mean nothing was ever unseen and the badge could never appear.
+api.post('/achievements/seen', async (req, res) => {
+  const student = await vibeStudent(req);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  if (!achievementsAccess(student).visible) return res.status(403).json({ error: 'Achievements are off' });
+  await Student.updateOne({ _id: student._id }, { $set: { achievementsSeenAt: new Date() } });
+  res.json({ ok: true });
+});
+
 // Public — this is what the QR on a shared card opens. No login, no PII beyond
 // the recipient's name and what they won.
 api.get('/verify/:code', async (req, res) => {
