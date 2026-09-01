@@ -122,13 +122,18 @@ export async function buildAchievementState(student) {
   const all = [...groups.values()];
   const earnedCount = rows.length;
   const weekAgo = new Date(Date.now() - 7 * 86400000);
+  // "Unseen" is measured against the last time the tab was actually opened, not
+  // a rolling window: a card stays flagged until the student has looked at it,
+  // and stops the moment they do. Never opened means everything they hold is new.
+  const seenAt = student.achievementsSeenAt ? new Date(student.achievementsSeenAt) : null;
   return {
     groups: all,
     locked,
     counts: {
       earned: earnedCount,
       thisWeek: rows.filter((a) => new Date(a.earnedAt) >= weekAgo).length,
-      boards: all.filter((g) => g.kind === 'rank').length
+      boards: all.filter((g) => g.kind === 'rank').length,
+      unseen: rows.filter((a) => !seenAt || new Date(a.earnedAt) > seenAt).length
     }
   };
 }

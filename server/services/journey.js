@@ -12,6 +12,7 @@ import SPTransaction from '../models/SPTransaction.js';
 import Commitment from '../models/Commitment.js';
 import JourneyPlan from '../models/JourneyPlan.js';
 import JourneyProgress from '../models/JourneyProgress.js';
+import Student from '../models/Student.js';
 import { buildVibeState, isVibeEligible } from './vibe.js';
 
 export const SPA_TOTAL = 53;
@@ -171,11 +172,12 @@ export async function saveJourneyPlan(email, incoming = {}) {
   const existing = await JourneyPlan.findOne({ email }).lean();
   const today = startOfToday();
   // Can't set a standup goal once the 3600-min target is already met (achieved).
-  let standupDone = false;
+  let minutes = null;
   if (incoming.standupBy) {
     const att = await AttendanceRecord.find({ email }).lean();
-    standupDone = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0) >= STANDUP_MINUTES_TARGET;
+    minutes = att.reduce((a, r) => a + (r.attendedMinutes || 0), 0);
   }
+  const standupDone = minutes != null && minutes >= STANDUP_MINUTES_TARGET;
   const set = {};
   for (const f of ['standupBy', 'vibeBy', 'spaBy', 'projectBy']) {
     const cur = existing?.[f] ? new Date(existing[f]) : null;
@@ -183,6 +185,26 @@ export async function saveJourneyPlan(email, incoming = {}) {
     if (locked) continue;
     if (f === 'standupBy' && standupDone) continue;           // already achieved → not settable
     if (Object.prototype.hasOwnProperty.call(incoming, f)) set[f] = incoming[f] ? new Date(incoming[f]) : null;
+  }
+  // Snapshot the remaining work at set time (see JourneyPlan.atSet). Written only
+  // when a date is actually being SET (not cleared), once per lock cycle.
+  const now = new Date();
+  if (set.standupBy) {
+    set['atSet.standup'] = { remainingMin: Math.max(0, STANDUP_MINUTES_TARGET - (minutes ?? 0)), at: now };
+  }
+  if (set.vibeBy) {
+    const student = await Student.findOne({ email }).lean();
+    if (student) {
+      const v = await buildVibeState(student);
+      const ladder = isVibeEligible(student) ? v.ladder : v.ladder.filter(l => l.key !== 'onboarding');
+      const pct = Math.round(ladder.reduce((a, l) => a + (l.pct || 0), 0) / (ladder.length || 1));
+      set['atSet.vibe'] = { remainingPct: Math.max(0, 100 - pct), at: now };
+    }
+  }
+  if (set.spaBy || set.projectBy) {
+    const jp = (await JourneyProgress.findOne({ email }).lean()) || {};
+    if (set.spaBy) set['atSet.spa'] = { remainingCount: Math.max(0, (jp.spaTotal || SPA_TOTAL) - (jp.spaSolved || 0)), at: now };
+    if (set.projectBy) set['atSet.project'] = { prsRaised: jp.prsRaised || 0, prsMerged: jp.prsMerged || 0, at: now };
   }
   if (Object.keys(set).length) await JourneyPlan.updateOne({ email }, { $set: set }, { upsert: true });
 }

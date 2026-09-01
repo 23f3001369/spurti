@@ -118,11 +118,28 @@ const SPA_GOOD = ['approved', 'audit_passed'];
 // ── Query answering → SP (Pattern A: rubric-recomputed) ──────────────────────
 // +5 SP per DISTINCT peer query a student answered (from
 // act_query_reviews.peer.submittedAnswerHistory), self-answers excluded.
-// Anti-farming: answers the admin REJECTED or MARKED_UNWORTHY earn nothing
-// (unreviewed + approved still count), and total query SP is capped per student.
+// Anti-farming: the +5 is permanent once earned (no clawback on review), but an
+// answer the admin REJECTS (-10) or MARKS UNWORTHY (-5) takes ONE penalty row —
+// only for queries raised on/after QUERY_PEN_QUERY_START. Verdicts settled before
+// QUERY_PAY_STICKY_FROM keep the old no-pay treatment. Total pay capped per student.
 // Answering only — asking a question earns nothing.
 const QUERY_UNIT = 5, QUERY_CAP = 200;   // +5 SP / distinct query, cap 200 → max 40 queries
 const QUERY_BAD_ACTIONS = ['rejected', 'marked_unworthy'];
+// Penalty for admin-disapproved answers, FORWARD-ONLY — gated on when the QUERY was
+// RAISED (createdAt), not on the verdict date. Answers to queries that entered the
+// system before this date earn nothing when disapproved but never cost anything,
+// however late the admin reviews them; only answers to NEW queries carry the risk.
+// (Team decision 22 Aug: an admin swept 80 old-query verdicts the day the rule
+// launched, which the original verdict-date gate would have penalized — old-query
+// answers were given under the old no-penalty rules, so the query's entry date is
+// the honest boundary.)
+const QUERY_PEN_QUERY_START = '2026-08-22';
+// Verdicts BEFORE this date settled under the old no-pay rule and stay that way;
+// on/after it, pay is sticky (see the query loop). Set to the penalty-launch day
+// so the 21-Aug review sweep withdraws nothing.
+const QUERY_PAY_STICKY_FROM = '2026-08-21';
+const QUERY_PEN = { rejected: 10, marked_unworthy: 5 };
+const QUERY_PEN_CAP = 200;               // penalties stop accruing at -200 per student
 
 // ── PRESERVED categories — NOT recomputable from Zoom source, so they must survive
 // the delete-and-rebuild (else the wipe erases them every run). 'manual' = ViBe/
@@ -313,15 +330,37 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
   }
   // Genuine fraud = net teacher_fraud_penalty + fraud_penalty_reversal < 0, with
   // operator "Testing" rows excluded (they are demote-feature tests, all reversed).
+  // The /testing/i guard applies to the PENALTY side ONLY — a reversal always counts.
+  // A reversal's reason routinely quotes the penalty it undoes (e.g. '...was explicitly
+  // logged with reason "Testing purpose"'), so filtering both sides dropped the +credit
+  // and kept the -debit, flagging a net-zero account as fraud. That hit exactly one
+  // person: an auditor whose penalty had already been investigated and reversed.
   for (const f of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['teacher_fraud_penalty', 'fraud_penalty_reversal'] }, reason: { $not: /testing/i } } },
-        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' } } }]).toArray()) {
-    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true }); }
+        { $match: { $or: [
+            { transactionType: 'teacher_fraud_penalty', reason: { $not: /testing/i } },
+            { transactionType: 'fraud_penalty_reversal' }] } },
+        { $group: { _id: { $toLower: '$email' }, net: { $sum: '$deltaSPA' }, when: { $max: '$createdAt' } } }]).toArray()) {
+    if (f.net < 0) { const c = canonOf(f._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), fraud: true, fraudDate: dstr(f.when) || null }); }
   }
-  for (const a of await sak.collection('act_spa_transactions').aggregate([
-        { $match: { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } } },
-        { $group: { _id: { $toLower: '$email' } } }]).toArray()) {
-    const c = canonOf(a._id); spaFlag.set(c, { ...(spaFlag.get(c) || {}), auditFail: true });
+  // Audit failures, EXCLUDING the collusion-pattern cleanup. That sweep de-endorsed
+  // ~28k endorsements in bulk off a multi-signal detector, and its own rejectNote
+  // says the teacher's +10% reward was revoked and "no other penalty" — so it is
+  // not adjudicated misconduct and must not trigger the -20%. Same guard in spirit
+  // as the fraud netting above, which already drops operator test rows. A student
+  // who ALSO has a genuine audit failure still gets flagged, on that row's merit.
+  const auditRows = await sak.collection('act_spa_transactions').find(
+        { transactionType: { $in: ['audit_failure_learner_penalty', 'audit_failure_teacher_penalty'] } },
+        { projection: { email: 1, endorsementId: 1, createdAt: 1 } }).toArray();
+  const auditEids = [...new Set(auditRows.map((r) => r.endorsementId).filter(Boolean))];
+  const cleanupEids = new Set((await sak.collection('act_spa_endorsements').find(
+        { _id: { $in: auditEids }, rejectNote: /collusion-pattern cleanup/i },
+        { projection: { _id: 1 } }).toArray()).map((d) => String(d._id)));
+  for (const a of auditRows) {
+    if (a.endorsementId && cleanupEids.has(String(a.endorsementId))) continue;
+    const c = canonOf(String(a.email || '').toLowerCase().trim());
+    const prev = spaFlag.get(c) || {};
+    const d = dstr(a.createdAt); // date of the offence, for dating the penalty row
+    spaFlag.set(c, { ...prev, auditFail: true, auditDate: (d && (!prev.auditDate || d > prev.auditDate)) ? d : prev.auditDate });
   }
 
   // 3d. Query answering → per-canon distinct queries answered (dated). Answerer =
@@ -334,11 +373,35 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
       uidToEmail.set(String(r.userId), String(r.email).toLowerCase().trim());
   }
   const queryByCanon = new Map(); // canon -> [YYYY-MM-DD ...] (one per distinct query answered)
+  const queryPenByCanon = new Map(); // canon -> [{date, action}] penalizable verdicts (query raised on/after QUERY_PEN_QUERY_START)
   for (const q of await sak.collection('act_query_reviews').find(
         { 'peer.submittedAnswerHistory.0': { $exists: true } },
-        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1 } }).toArray()) {
+        { projection: { userId: 1, createdAt: 1, updatedAt: 1, 'peer.submittedAnswerHistory': 1, 'peer.answer.submittedAt': 1, 'peer.review.action': 1, 'peer.review.at': 1 } }).toArray()) {
     const askerId = String(q.userId);
-    if (QUERY_BAD_ACTIONS.includes(q.peer?.review?.action)) continue; // admin-flagged bad answer earns nothing
+    const action = q.peer?.review?.action;
+    if (QUERY_BAD_ACTIONS.includes(action)) {
+      const penDate = dstr(q.peer?.review?.at);
+      const qRaised = dstr(q.createdAt);
+      // Historical reviews (verdict before QUERY_PAY_STICKY_FROM) stand as settled:
+      // the answer never pays and carries no penalty — exactly as balances have
+      // read for weeks. From that date onward the +5, once earned, is PERMANENT
+      // (team decision 22 Aug: no double-charge — a later disapproval never claws
+      // back the pay, it adds exactly one penalty row instead), so the query falls
+      // through to the pay loop below like any other.
+      if (!penDate || penDate < QUERY_PAY_STICKY_FROM) continue;
+      // Single penalty per answer, and only for queries RAISED after the rule
+      // existed — answers to older queries keep their pay and cost nothing.
+      if (qRaised && qRaised >= QUERY_PEN_QUERY_START) {
+        const seen = new Set();
+        for (let uid of (q.peer.submittedAnswerHistory || [])) {
+          uid = String(uid); if (uid === askerId || seen.has(uid)) continue; seen.add(uid);
+          const e = uidToEmail.get(uid); if (!e) continue;
+          const c = canonOf(e);
+          let arr = queryPenByCanon.get(c); if (!arr) { arr = []; queryPenByCanon.set(c, arr); }
+          arr.push({ date: penDate, action });
+        }
+      }
+    }
     const date = dstr(q.peer?.answer?.submittedAt) || dstr(q.createdAt) || dstr(q.updatedAt); if (!date) continue;
     const seen = new Set();
     for (let uid of (q.peer.submittedAnswerHistory || [])) {
@@ -404,9 +467,18 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     const penRate = flags.fraud ? SPA_FRAUD_RATE : (flags.auditFail ? SPA_AUDIT_RATE : 0);
     let spaPenalty = 0;
     if (penRate > 0) {
-      spaPenalty = Math.round(rows.reduce((a, r) => a + r.delta, 0) * penRate);
-      if (spaPenalty > 0) rows.push({ date: TODAY, order: 9, cat: 'spa', delta: -spaPenalty,
-        reason: `SPA (${ddmon(TODAY)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of current SP -> -${spaPenalty} SP.` });
+      // Date the penalty to the offence, NOT to TODAY. The ledger is wiped and rebuilt
+      // on every sp-refresh (4x/day), so a TODAY stamp re-dated one old decision every
+      // run — in a newest-first SP Bank that reads as a fresh punishment every morning.
+      const penDate = (flags.fraud ? flags.fraudDate : flags.auditDate) || TODAY;
+      // Base is what the student had EARNED BY the offence date, not their whole
+      // accumulated total. Charging a July offence against August earnings meant the
+      // penalty kept growing after the fact, and a back-dated row computed from future
+      // rows made the running balance dip by more than was ever there at that point.
+      const penBase = rows.reduce((a, r) => a + (r.date <= penDate ? r.delta : 0), 0);
+      spaPenalty = Math.round(penBase * penRate);
+      if (spaPenalty > 0) rows.push({ date: penDate, order: 9, cat: 'spa', delta: -spaPenalty,
+        reason: `SPA (${ddmon(penDate)}): ${flags.fraud ? 'fraud' : 'audit-failure'} penalty -${Math.round(penRate * 100)}% of the ${penBase} SP earned up to ${ddmon(penDate)} -> -${spaPenalty} SP.` });
     }
     // Query-answer rows: +5 per distinct peer query answered, one 'query' row per
     // day, oldest-first, capped at QUERY_CAP SP per student (excess days truncated).
@@ -414,6 +486,10 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     if (qDates && qDates.length) {
       const qByDay = new Map();
       for (const d of qDates) qByDay.set(d, (qByDay.get(d) || 0) + 1);
+      // Anti-refarm needs no separate cap burn under sticky pay: a disapproved
+      // answer STAYS in the paid pool, so it already consumes its slice of the
+      // lifetime cap — a maxed farmer whose junk gets flagged eats the penalties
+      // with no cap room ever freed.
       let qUsed = 0;
       for (const d of [...qByDay.keys()].sort()) {
         if (qUsed >= QUERY_CAP) break;
@@ -428,6 +504,32 @@ const dayLabel = (topic) => { const m = String(topic).match(/Day\s+([IVXLC0-9]+)
     }
     // Preserved rows (manual commitment/admin SP + peer_faq) — fold in so they survive the wipe.
     for (const p of (preservedByCanon.get(cand) || [])) rows.push(p);
+    // Query-answer penalties (rule announced 21 Aug 2026, forward-only): one 'query'
+    // row per verdict day, dated to the VERDICT (stable across rebuilds, like the SPA
+    // penalty). Capped at QUERY_PEN_CAP per student and clamped so the penalty can
+    // never drive the student's total balance below zero.
+    const qPens = queryPenByCanon.get(cand);
+    if (qPens && qPens.length) {
+      let penBudget = QUERY_PEN_CAP, pensUsed = 0;
+      const penByDay = new Map(); // date -> { rejected: n, marked_unworthy: n }
+      for (const p of qPens) { const o = penByDay.get(p.date) || { rejected: 0, marked_unworthy: 0 }; o[p.action]++; penByDay.set(p.date, o); }
+      for (const d of [...penByDay.keys()].sort()) {
+        if (penBudget <= 0) break;
+        const o = penByDay.get(d);
+        // Clamp to SP actually held by the verdict date (same lesson as the SPA
+        // penalty): the running balance must never dip below zero at this row.
+        const heldByD = rows.reduce((a, r) => a + (r.date <= d ? r.delta : 0), 0) - pensUsed;
+        let pen = o.rejected * QUERY_PEN.rejected + o.marked_unworthy * QUERY_PEN.marked_unworthy;
+        pen = Math.min(pen, penBudget, Math.max(0, heldByD));
+        if (pen <= 0) continue;
+        penBudget -= pen; pensUsed += pen;
+        const parts = [];
+        if (o.rejected) parts.push(`${o.rejected} rejected (-${QUERY_PEN.rejected} each)`);
+        if (o.marked_unworthy) parts.push(`${o.marked_unworthy} marked unworthy (-${QUERY_PEN.marked_unworthy} each)`);
+        rows.push({ date: d, order: 6, cat: 'query', delta: -pen,
+          reason: `Query answering (${ddmon(d)}): admin review — ${parts.join(' + ')} -> -${pen} SP.` });
+      }
+    }
     rows.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.order - b.order);
     let bal = 0; for (const r of rows) { bal += r.delta; ledger.push({ email: cand, name: info.name, ...r, balanceAfter: bal }); }
     finalBal.set(cand, bal); nameByCanon.set(cand, info.name);
