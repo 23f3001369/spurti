@@ -208,7 +208,10 @@ export async function saveJourneyPlan(email, incoming = {}) {
     const locked = cur && cur.getTime() >= today.getTime();   // active future target → locked
     if (locked) continue;
     if (f === 'standupBy' && standupDone) continue;           // already achieved → not settable
-    if (Object.prototype.hasOwnProperty.call(incoming, f)) set[f] = incoming[f] ? new Date(incoming[f]) : null;
+    if (Object.prototype.hasOwnProperty.call(incoming, f)) {
+      const incomingDate = incoming[f] ? new Date(incoming[f]) : null;
+      set[f] = incomingDate && !isNaN(incomingDate.getTime()) ? incomingDate : null;
+    }
   }
   // Snapshot the remaining work at set time (see JourneyPlan.atSet). Written only
   // when a date is actually being SET (not cleared), once per lock cycle.

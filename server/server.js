@@ -369,6 +369,11 @@ api.get('/me', async (req, res) => {
 
 // ---- ViBe Goals (commitment-SP module; 16 July cohort onward) ----------------
 async function vibeStudent(req) {
+  if (!ALLOW_STUDENT_SEARCH) {
+    const email = await studentEmailFromRequest(req);
+    if (!email) return null;
+    return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
+  }
   const email = normalizeEmail(req.body?.email || req.query.email) || await studentEmailFromRequest(req);
   if (!email) return null;
   return Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
@@ -696,7 +701,9 @@ function logAchievementView(req, code, result) {
 // the student uploading anything.
 api.post('/share/card', async (req, res) => {
   const { achId, dataUrl } = req.body || {};
-  const student = await vibeStudent(req);
+  const email = await studentEmailFromRequest(req);
+  if (!email) return res.status(401).json({ error: 'Authentication required' });
+  const student = await Student.findOne({ $or: [{ email }, { alternateEmail: email }] }).lean();
   if (!student) return res.status(404).json({ error: 'Student not found' });
   if (!achievementsAccess(student).sharing) return res.status(403).json({ error: 'Sharing is off' });
   const ach = await Achievement.findOne({ studentId: String(student._id), achId }).lean();
@@ -704,7 +711,7 @@ api.post('/share/card', async (req, res) => {
 
   const url = `${publicBaseUrl(req)}/spurti/cards/${ach.verifyId}.png`;
   const file = path.join(CARD_DIR, `${ach.verifyId}.png`);
-  // Write once. Identity here is only the email in the request — the same weak
+  // Write once. Identity is now the authenticated student's email — the same
   // model the rest of the app uses — so allowing overwrites would let anyone
   // replace the picture that a student's public verify link previews.
   if (fs.existsSync(file)) return res.json({ url, stored: false });
